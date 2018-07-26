@@ -6,8 +6,6 @@ Alexandre, N. M., P. T. Humphrey, A. D. Gloss, J. Lee, J. Frazier, H. A. Affeldt
 
 ### Files & Descriptions
 
-#### Analysis R code
-
 R scripts and associated narrative description of analysis can be found for all experiments presented in the main text in the files below. We provide Rmarkdown (`.Rmd`) files and corresponding compiled `.html` output.
 
 1. Herbivory survey analysis: `01_Herbivory_survey_v1.html`, `01_Herbivory_survey_v1.Rmd`
