@@ -1,7 +1,8 @@
 [![DOI](https://zenodo.org/badge/131555134.svg)](https://zenodo.org/badge/latestdoi/131555134)
 
-## Habitat preference of an herbivore shapes the habitat distribution of its host plant
-Alexandre, N. M., P. T. Humphrey, A. D. Gloss, J. Lee, J. Frazier, H. A. Affeldt III, and N. K. Whiteman. 2018.  Ecosphere. 10.1002/ ecs2.2372 (full citation pending).
+## Data and code for: Habitat preference of an herbivore shapes the habitat distribution of its host plant
+Alexandre, N. M., P. T. Humphrey, A. D. Gloss, J. Lee, J. Frazier, H. A. Affeldt III, and N. K. Whiteman. 2018.
+*Ecosphere* 10.1002/ ecs2.2372 (full citation pending).
 
 ### Files & Descriptions
 
