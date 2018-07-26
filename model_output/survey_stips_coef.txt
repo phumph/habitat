@@ -1,0 +1,7 @@
+"Estimate"	"Std. Error"	"z value"	"Pr(>|z|)"
+"(Intercept)"	0.7914	0.1968	4.0215	1e-04
+"area"	0.0098	0.0031	3.1875	0.0014
+"site_typesun"	1.6334	0.2068	7.8986	0
+"(Intercept)"	-2.3111	0.2658	-8.6955	0
+"site_typeshade"	0.3685	0.276	1.3351	0.1818
+"site_typesun"	2.7951	0.3742	7.4686	0

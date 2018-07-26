@@ -1,0 +1,9 @@
+"2.5 %"	"97.5 %"	"Estimate"
+"cond.(Intercept)"	-4.27	-2.25	-3.26
+"cond.site_typesun"	2.73	4.77	3.75
+"cond.area"	0.01	0.03	0.02
+"cond.Std.Dev.stem_id.(Intercept)"	0	14.71	0.13
+"cond.Std.Dev.site_id.(Intercept)"	0.39	1.08	0.65
+"zi.zi~(Intercept)"	-2.4	-1.03	-1.71
+"sigma"	0.04	1.38	0.24
+"sigma"	2.45	118.06	17.02

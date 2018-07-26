@@ -1,0 +1,541 @@
+---
+title: "Herbivory survey analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+Load the Sun Shade header file:
+```{r}
+source("./_sun_shade_header.R")
+```
+
+
+Load the data:
+```{r}
+survey <- read.table(file="./data/source_site_traits/site_herbivory_final.txt",header=T)
+```
+
+### Plots
+
+Plotting the data for A3 Fig. S1:
+```{r fig.align='center', fig.height=2.5, fig.width=6, message=FALSE, warning=FALSE}
+fS1a <- ggplot(survey,aes(x = stipples)) + geom_histogram(bins = 20) + facet_wrap(~ site_type) +
+  theme_pth1() + xlab("stipples per leaf")
+fS1b <- ggplot(survey,aes(x = mines)) + geom_histogram(bins = 20) + facet_wrap(~ site_type) +
+  theme_pth1() + xlab("mines per leaf")
+
+# Appendix 3: Fig. S1
+# pdf(file = "./Appendix_S3/A3_figS1.pdf", width = 6, height = 2.5, onefile = F)
+#   ggarrange(plotlist = list(fS1a, fS1b), nrow = 1, ncol = 2, labels = c("A","B"))
+# dev.off()
+ggarrange(plotlist = list(fS1a, fS1b), nrow = 1, ncol = 2, labels = c("A","B"))
+```
+
+Plot variance/mean ratios for stipple and mine data from herbivory survey (A3 Fig. S2):
+```{r fig.align='center', fig.height=2.5, fig.width=3.5, message=FALSE, warning=FALSE, paged.print=FALSE}
+survey3 <- dplyr::group_by(survey, site_type, site_id) %>% summarise(mu_stip = mean(stipples),
+                                                                     var_stip = var(stipples),
+                                                                     mu_mines = mean(mines),
+                                                                     var_mines = var(mines))
+
+fano1 <- ggplot(survey3, aes(y = var_stip/mu_stip, x = site_type)) +
+  geom_point(size = 2.5, col = "gray40") +
+  theme_pth1() + ggtitle("stipples") + theme(plot.title = element_text(size = 10, hjust = 0.5)) +
+  geom_hline(yintercept = 1, col = "gray60", lty = 2) +
+  xlab("") +
+  ylab("variance / mean")
+
+fano2 <- ggplot(survey3, aes(y = var_mines/mu_mines, x = site_type)) +
+  geom_point(size = 2.5, col = "gray40") +
+  theme_pth1() + ggtitle("mines") + theme(plot.title = element_text(size = 10, hjust = 0.5)) +
+  geom_hline(yintercept = 1, col = "gray60", lty = 2) +
+  xlab("") +
+  ylab("variance / mean")
+
+# pdf(file = "./Appendix_S3/A3_figS2.pdf", width = 4, height = 2.5)
+#   ggarrange(plotlist = list(fano1, fano2), nrow = 1,ncol = 2, labels = c("A","B"))
+# dev.off()
+
+ggarrange(plotlist = list(fano1, fano2), nrow = 1,ncol = 2, labels = c("A","B"))
+```
+
+
+Plotting the data that went into Fig. 1A:
+```{r, fig.height=2.5, fig.width=2.5, message=FALSE, warning=FALSE, fig.align='center'}
+survey2 <- dplyr::group_by(survey, site_type, stem_id) %>% summarise(n_stips = sum(stipples), n_mines = sum(mines))
+
+stip1 <- ggplot(survey2, aes(x = site_type, y = n_stips)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples per plant")
+
+mine1 <- ggplot(survey2, aes(x = site_type, y = n_mines)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("mines per plant")
+
+ggarrange(plotlist = list(stip1, mine1))
+```
+
+### Models
+#### Stipples
+
+For illustrative purposes, below we run through the analyses described in Part 1 of Appendix S3, where we fit Poisson-only vs. ZI-Poisson and then factor-specific ZI parameters. We include fits estimated under NB as well. For these purposes, we removed the `area` term to improve model convergence of the habitat-specific ZI-Poisson model (below). In the section that follows, we re-fit and re-compare all models *including* this term.
+
+Running Poisson-only and comparing to ZI-Poisson:
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+POIS.stip0 <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = poisson)
+
+POIS.stip1 <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                    zi = ~ 1,
+                    data = survey,
+                    family = poisson)
+
+POIS.stip2 <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                      zi = ~ site_type,
+                      data = survey,
+                      family = poisson)
+```
+
+Generate simulations and make predictive distribution plots from MLE fits:
+```{r}
+set.seed(12345)
+
+POIS.stip0.sim <- simulate(POIS.stip0,  nsim = 1000)
+POIS.stip1.sim <- simulate(POIS.stip1,  nsim = 1000)
+POIS.stip2.sim <- simulate(POIS.stip2,  nsim = 1000)
+
+survey.stip.pp0 <- pp.plots(thesim = POIS.stip0.sim, thedat = survey, thefact = 'site_type', theresponse = 'stipples')
+survey.stip.pp1 <- pp.plots(thesim = POIS.stip1.sim, thedat = survey, thefact = 'site_type', theresponse = 'stipples')
+survey.stip.pp2 <- pp.plots(thesim = POIS.stip2.sim, thedat = survey, thefact = 'site_type', theresponse = 'stipples')
+```
+
+Generate plot for comparisons to include as A3 Fig. S3:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+# pdf(file = "./Appendix_S3/POIS.stip0.pp.pdf", width = 6, height = 2, onefile = F)
+#   survey.stip.pp0$plots
+# dev.off()
+survey.stip.pp0$plots
+```
+
+Calculate max(Y) distribution and p-value:
+```{r, fig.height=2, fig.width=8, message=FALSE, warning=FALSE, fig.align='center'}
+survey.stip.max0 <- pp.max(sim1 = POIS.stip0.sim, dat1 = survey, fact1 = 'site_type', response1 = 'stipples')
+survey.stip.max1 <- pp.max(sim1 = POIS.stip1.sim, dat1 = survey, fact1 = 'site_type', response1 = 'stipples')
+survey.stip.max2 <- pp.max(sim1 = POIS.stip2.sim, dat1 = survey, fact1 = 'site_type', response1 = 'stipples')
+
+#ggarrange(plotlist = list(survey.stip.max0$plot,survey.stip.max1$plot,survey.stip.max2$plot),ncol = 3)
+```
+
+Generate A3 Fig. S4:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+# pdf(file = "./Appendix_S3/POIS.stip1.pp.pdf", width = 6, height = 2, onefile = F)
+#   survey.stip.pp1$plots
+# dev.off()
+
+survey.stip.pp1$plots
+```
+
+Generate A3 Fig. S5:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+# pdf(file = "./Appendix_S3/POIS.stip2.pp.pdf", width = 6, height = 2, onefile = F)
+#   survey.stip.pp2$plots
+# dev.off()
+
+survey.stip.pp2$plots
+```
+
+Try also to plot additional test statistic that might help reveal how Poisson fails to fit at the upper range, particularly for shaded sites (A3 Fig. S6):
+```{r, fig.height=2, fig.width=3.25, message=FALSE, warning=FALSE, fig.align='center'}
+POIS.stip0.max <- pp.max(sim1 = POIS.stip0.sim, dat1 = survey,
+                         fact1 = 'site_type', response1 = 'stipples')
+POIS.stip1.max <- pp.max(sim1 = POIS.stip1.sim, dat1 = survey,
+                         fact1 = 'site_type', response1 = 'stipples')
+POIS.stip2.max <- pp.max(sim1 = POIS.stip2.sim, dat1 = survey,
+                         fact1 = 'site_type', response1 = 'stipples')
+# ggarrange(plotlist = list(POIS.stip0.max$plot,POIS.stip1.max$plot,POIS.stip2.max$plot),ncol = 3)
+
+# pdf(file = "./Appendix_S3/POIS.stip.2.max.pdf", width = 3.25, height = 2, onefile = F)
+#   print(POIS.stip2.max$plot + xlab("max(Y)"))
+# dev.off()
+print(POIS.stip2.max$plot + xlab("max(Y)"))
+```
+
+Now run Negative Binomial models with and without ZI and dispersion terms:
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+ZINB.stip0  <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip1  <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip2  <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip3  <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ 0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip4  <- glmmTMB(stipples ~ site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ 0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+# errors produced by these models above are normal.
+# See https://cran.r-project.org/web/packages/glmmTMB/vignettes/troubleshooting.html
+```
+
+Output all model comparisons via $\text{AIC}_c$:
+```{r}
+AICs <- ICtab(POIS.stip0,POIS.stip1,POIS.stip2,ZINB.stip0,
+              ZINB.stip1,ZINB.stip2,ZINB.stip3,ZINB.stip4, type = 'AICc')
+print(AICs)
+```
+
+Output all model test statistics and generate table:
+```{r}
+AICs2 <- data.frame(model = attr(AICs, 'row.names'), dAICc = AICs[[1]], df = AICs[[2]])
+# write.table(AICs2, file = "./model_output/AICs.txt",sep = "\t")
+```
+
+Generate simulations for sub-optimal ZINB models:
+```{r, fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+survey.stip.sim0  <- simulate(ZINB.stip0,  nsim = 1000)
+survey.stip.sim1  <- simulate(ZINB.stip1,  nsim = 1000)
+survey.stip.sim2  <- simulate(ZINB.stip2,  nsim = 1000)
+survey.stip.sim4  <- simulate(ZINB.stip4,  nsim = 1000)
+
+# calcualte pp.plots for each:
+ZINB.pp0 <- pp.plots(thesim = survey.stip.sim0, thedat = survey,
+                     thefact = 'site_type', theresponse = 'stipples')
+ZINB.pp1 <- pp.plots(thesim = survey.stip.sim1, thedat = survey,
+                     thefact = 'site_type', theresponse = 'stipples')
+ZINB.pp2 <- pp.plots(thesim = survey.stip.sim2, thedat = survey,
+                     thefact = 'site_type', theresponse = 'stipples')
+ZINB.pp4 <- pp.plots(thesim = survey.stip.sim4, thedat = survey,
+                     thefact = 'site_type', theresponse = 'stipples')
+
+#ggarrange(plotlist = list(ZINB.pp0$plots,ZINB.pp1$plots,ZINB.pp2$plots,ZINB.pp4$plots))
+```
+
+Now for the maximum values:
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+ZINB.pp.max0 <- pp.max(sim1 = survey.stip.sim0, dat1 = survey,
+                       fact1 = 'site_type', response1 = 'stipples')
+ZINB.pp.max1 <- pp.max(sim1 = survey.stip.sim1, dat1 = survey,
+                       fact1 = 'site_type', response1 = 'stipples')
+ZINB.pp.max2 <- pp.max(sim1 = survey.stip.sim2, dat1 = survey,
+                       fact1 = 'site_type', response1 = 'stipples')
+ZINB.pp.max4 <- pp.max(sim1 = survey.stip.sim4, dat1 = survey,
+                       fact1 = 'site_type', response1 = 'stipples')
+
+#ggarrange(plotlist = list(ZINB.pp.max0$plot,ZINB.pp.max1$plot,ZINB.pp.max2$plot,ZINB.pp.max4$plot))
+```
+
+Output coefficient estimates for best model:
+```{r}
+survey.stip.bm <- ZINB.stip3
+ci_stips <- confint(survey.stip.bm)
+coef_stips <- do.call(rbind,summary(survey.stip.bm)$coef)
+round(ci_stips,2)
+```
+
+Simulate best stipple model:
+```{r}
+set.seed(12345)
+survey.stip.sim  <- simulate(survey.stip.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+survey.stip.pp <- pp.plots(thesim = survey.stip.sim, thedat = survey, thefact = 'site_type', theresponse = 'stipples')
+
+# pdf(file = "./Appendix_S3/survey_stip_pp.pdf", width = 6, height = 2, onefile = F)
+#   print(survey.stip.pp$plots)
+# dev.off()
+
+print(survey.stip.pp$plots)
+```
+
+Additional check on max(Y) to see that NB fixed problem for shade sites:
+```{r, fig.height=2, fig.width=3.25, message=FALSE, warning=FALSE, fig.align='center'}
+survey.stip.max <- pp.max(sim1 = survey.stip.sim, dat1 = survey, fact1 = 'site_type', response1 = 'stipples')
+
+# pdf(file = "./Appendix_S3/survey_stip_max.pdf", width = 3.25, height = 2, onefile = F)
+#   print(survey.stip.max$plot)
+# dev.off()
+
+print(survey.stip.max$plot)
+```
+
+Print summary of test statistics:
+```{r}
+print(survey.stip.pp$means)
+```
+
+```{r}
+print(survey.stip.pp$p0)
+```
+
+```{r}
+print(survey.stip.pp$intensity)
+```
+
+Combined plot output of best ZINB model (A3 Fig. S7):
+```{r, fig.height=2, fig.width=8, message=FALSE, warning=FALSE, fig.align='center'}
+survey.stip.max$plot <- survey.stip.max$plot + xlab("max(Y)")
+# pdf(file = "./Appendix_S3/pp_stips_best_mod.pdf", width = 8, height = 2, onefile = F)
+#   ggarrange(plotlist = list(survey.stip.pp$plots,survey.stip.max$plot), labels = c('','C'), align = 'hv', widths = c(2.15,1))
+# dev.off()
+ggarrange(plotlist = list(survey.stip.pp$plots,survey.stip.max$plot), labels = c('','C'), align = 'hv', widths = c(2.15,1))
+```
+
+#### Re-fitting all models with `area` term
+
+Including the `area` term results in convergence issues with the habitat-specific ZI-Poisson model (`POIS.stip2`) but does not affect the optimisation of any of the other models. Below we report model comparisons among all of the above models re-fit with `area` except `POIS.stip2`.
+
+First, re-fit:
+```{r, message=FALSE, warning=FALSE}
+# re-fit all models with area term:
+survey <- survey[complete.cases(survey),] # remove all rows with any 'NA' elements (excludes one additional row with NA leaf area)
+
+POIS.stip0b <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = poisson)
+
+POIS.stip1b <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                    zi = ~ 1,
+                    data = survey,
+                    family = poisson)
+# errors produced by these models above are normal.
+# See https://cran.r-project.org/web/packages/glmmTMB/vignettes/troubleshooting.html
+
+POIS.stip2b <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                      zi = ~ site_type,
+                      data = survey,
+                      family = poisson) # this model has convergence problems!
+
+## ZI-Negative Binomial models
+ZINB.stip0b  <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip1b  <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip2b  <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip3b  <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ 0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip4b  <- glmmTMB(stipples ~ area + site_type + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ 0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+```
+
+Re-running model comparisons via $\text{AIC}_c$:
+```{r}
+AICsb <- ICtab(POIS.stip0b,POIS.stip1b,POIS.stip2b,
+               ZINB.stip0b,ZINB.stip1b,ZINB.stip2b,ZINB.stip3b,ZINB.stip4b, type = 'AICc')
+print(AICsb)
+```
+
+Output coefficient estimates for best model (still `ZINB.stip3`, now labeled `ZINB.stip3b` with `area` term):
+```{r}
+survey.stip.bm_2 <- ZINB.stip3b
+ci_stips <- confint(survey.stip.bm_2)
+coef_stips <- do.call(rbind,summary(survey.stip.bm_2)$coef)
+round(ci_stips,2)
+```
+
+Simulate best model and output test statistics:
+```{r}
+set.seed(12345)
+survey.stip.sim_2  <- simulate(survey.stip.bm_2,  nsim = 1000)
+survey.stip.pp_2 <- pp.plots(thesim = survey.stip.sim_2, thedat = survey, thefact = 'site_type', theresponse = 'stipples')
+survey.stip.max_2 <- pp.max(sim1 = survey.stip.sim_2, dat1 = survey, fact1 = 'site_type', response1 = 'stipples')
+```
+
+Plot predictive distributions of test statistics:
+```{r fig.height=2, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE, fig.align='center'}
+survey.stip.max_2$plot <- survey.stip.max_2$plot + xlab("max(Y)")
+ggarrange(plotlist = list(survey.stip.pp_2$plots,survey.stip.max_2$plot),
+          labels = c('','C'), align = 'hv', widths = c(2.15,1))
+```
+
+Generate predicted responses for main text:
+```{r}
+print(survey.stip.pp_2$means)
+```
+
+
+```{r}
+print(survey.stip.pp_2$p0)
+```
+
+```{r}
+print(survey.stip.pp_2$intensity)
+```
+
+Note that intensity was not reported in text. This is the average stipple count *given that the leaf was damaged*, rather than the average stipple number across all sampled leaves (i.e., including zeros).
+
+
+### Models of Leaf mines from herbivory survey
+
+Run the models, *with* leaf area in all cases:
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+## POISSON MODELS
+POIS.mines0  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     #zi = ~1,
+                     data = survey,
+                     family = poisson)
+
+POIS.mines1  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~1,
+                     data = survey,
+                     family = poisson)
+
+POIS.mines2  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~site_type,
+                     data = survey,
+                     family = poisson)
+
+## NEGATIVE BINOMIAL MODELS
+ZINB.mines0  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     #zi = ~1,
+                     #dispformula = ~1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines1  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~1,
+                     #dispformula = ~1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines2  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     #dispformula = ~0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines3  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines4  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = nbinom2) # convergence problems; not considered further.
+```
+
+Output model comparisons via $\text{AIC}_c$:
+```{r}
+ICtab(POIS.mines0,POIS.mines1,POIS.mines2,
+      ZINB.mines0,ZINB.mines1,ZINB.mines2,ZINB.mines3,ZINB.mines4, type = 'AICc')
+```
+
+Output coefficient estimate for best model:
+```{r}
+# best model
+survey.mine.bm <- ZINB.mines3
+ci_mines <- confint(survey.mine.bm)
+coef_mines <- do.call(rbind,summary(survey.mine.bm)$coef)
+round(ci_mines,2)
+```
+
+Simulate best model for mines:
+```{r}
+set.seed(12345)
+survey.mine.sim  <- simulate(survey.mine.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r fig.height=2, fig.width=8, message=FALSE, warning=FALSE, fig.align='center'}
+survey.mine.pp <- pp.plots(thesim = survey.mine.sim, thedat = survey,
+                           thefact = 'site_type', theresponse = 'mines')
+survey.mine.max <- pp.max(sim1 = survey.mine.sim, dat1 = survey,
+                          fact1 = 'site_type', response1 = 'mines')
+
+survey.mine.max$plot <- survey.mine.max$plot + xlab("max(Y)")
+
+ggarrange(plotlist = list(survey.mine.pp$plots,survey.mine.max$plot),
+          labels = c('','C'), align = 'hv', widths = c(2.15,1))
+```
+
+Predictive model checks for best-ranked Poisson (but worse than ZINB via AICc) model:
+```{r fig.height=2, fig.width=8, message=FALSE, warning=FALSE, paged.print=FALSE, fig.align='center'}
+survey.mine.sim.pois  <- simulate(POIS.mines2,  nsim = 1000)
+survey.mine.pp.pois <- pp.plots(thesim = survey.mine.sim.pois, thedat = survey,
+                                thefact = 'site_type', theresponse = 'mines')
+survey.mine.max.pois <- pp.max(sim1 = survey.mine.sim.pois, dat1 = survey,
+                               fact1 = 'site_type', response1 = 'mines')
+
+survey.mine.max.pois$plot <- survey.mine.max.pois$plot + xlab("max(Y)")
+
+ggarrange(plotlist = list(survey.mine.pp.pois$plots,survey.mine.max.pois$plot),
+          labels = c('','C'), align = 'hv', widths = c(2.15,1))
+```
+
+In many ways, the ZI-Poisson (ZIP) model (`POIS.mines2`) fits as well if not slightly better via max(Y) than the best ZINB model (`ZINB.mines3`) (for sun habitats, $p_{T_{max}}^{ZIP} = 0.945; p_{T_{max}}^{ZINB} = 0.986$). However, judged by $\text{AIC}_c$, the ZINB version with habitat-specific dispersion is a better overall model ($\Delta \text{AIC}_c = -12.6$). Both models produce very similar predicted responses in terms of means and prevalence. Let's directly compare, first with the best ZINB model:
+```{r}
+print(survey.mine.pp$means)
+```
+
+```{r}
+print(survey.mine.pp$p0)
+```
+
+Now for the ZIP model:
+```{r}
+print(survey.mine.pp.pois$means)
+```
+
+```{r}
+print(survey.mine.pp.pois$p0)
+```
+
+In the end, the differences are operationally indistinguishable for the main response variables we are interested in (prevalence and overall mean abundance of damage). Thus, we will defer to the $\Delta \text{AIC}_c$ result for determining which model to report in Table 1 of the main text (`ZINB.mines3`).
+
+### Outputting model coefficients
+
+Below we output model coefficients reported in Table 1 of the main text:
+
+```{r}
+OUTDIR <- "./model_output/"
+write.table(round(ci_stips,2), file = paste0(OUTDIR,"survey_stips.txt"), sep = '\t')
+write.table(round(ci_mines,2), file = paste0(OUTDIR,"survey_mines.txt"), sep = '\t')
+write.table(round(coef_stips,4), file = paste0(OUTDIR,"survey_stips_coef.txt"), sep = '\t')
+write.table(round(coef_mines,4), file = paste0(OUTDIR,"survey_mines_coef.txt"), sep = '\t')
+```
+
+#### Output session info
+
+```{r}
+sessionInfo()
+```
+

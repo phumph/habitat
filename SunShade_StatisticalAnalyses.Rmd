@@ -1,0 +1,1489 @@
+---
+title: "Statistical Analyses for Alexandre, et al."
+output: html_notebook
+---
+
+This document contains all statistical methods for the paper *Habitat preference of an herbivore shapes the habitat distribution of its host plant*.
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+# load globals:
+suppressPackageStartupMessages(require(ggplot2, warn.conflicts = FALSE))
+suppressPackageStartupMessages(require(gridExtra, warn.conflicts = FALSE))
+suppressPackageStartupMessages(require(ggpubr, warn.conflicts = FALSE))
+suppressPackageStartupMessages(require(glmmTMB, warn.conflicts = FALSE))
+suppressPackageStartupMessages(require(bbmle, warn.conflicts = FALSE))
+
+# load plotting theme:
+theme_pth1 <- function(base_size = 9, base_family = "sans") {
+    theme_bw(
+      base_family = base_family,
+      base_size = base_size
+    ) +
+      theme(
+        plot.background = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        axis.line = element_line(size = 0.4),
+        #axis.ticks = element_line(size = 0.3),
+        axis.ticks = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(size = rel(0.9)),
+        strip.placement = "outside",
+        # strip.background = element_rect(fill = "gray95", color = NA),
+        panel.spacing = unit(1.5, "lines"),
+        legend.position = "right",
+        legend.background = element_blank(),
+        legend.text = element_text(size = 9),
+        legend.text.align = 0,
+        legend.key = element_blank()
+      )
+  }
+```
+
+
+Define functions for predictive simulation model checking
+```{r}
+#### define test statistic functions ####
+# proportion of zeros (p(0)) returned by simulation results:
+prop.zero <- function(sim1, dat1, fact1 = 'site_type', response1 = 'stipples'){
+  # define zero prop calculation function
+  calc.prop.zero <- function(x){ length(which(x==0))/length(x) }
+  
+  # join data and sim data:
+  dat2 <- cbind(dat1, sim1)
+  
+  # find observed number of zeros by grouping factor:
+  lvl1 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[1],]
+  lvl2 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[2],]
+  
+  # calculate distribution of proportion zeros by grouping factor for all simulations:
+  zeros.sim.1 <- apply(lvl1[,names(lvl1) %in% names(sim1)], 2, calc.prop.zero)
+  zeros.sim.2 <- apply(lvl2[,names(lvl1) %in% names(sim1)], 2, calc.prop.zero)
+  
+  # calculate proportion of observed zeros by grouping factor:
+  lvl1.0 <- calc.prop.zero(lvl1[,paste0(response1)])
+  lvl2.0 <- calc.prop.zero(lvl2[,paste0(response1)])
+  
+  # construct data.frame
+  res1 <- data.frame(prop.zero = c(as.vector(zeros.sim.1),as.vector(zeros.sim.2)),
+                     fact1 = c(rep(levels(dat2[,paste0(fact1)])[1],length(sim1[1,])),
+                               rep(levels(dat2[,paste0(fact1)])[2], length(sim1[1,]))),
+                     type = 'sim'
+                     )
+  res2 <- rbind(res1, data.frame(prop.zero = c(lvl1.0,lvl2.0),
+                                 fact1 = c(levels(dat2[,paste0(fact1)])[1],levels(dat2[,paste0(fact1)])[2]),
+                                 type = c('obs','obs')
+  ))
+  
+  # calculate p-values for placing them on the plot:
+  q.1 <- round(length(which(lvl1.0 < zeros.sim.1))/length(zeros.sim.1),3)
+  q.2 <- round(length(which(lvl2.0 < zeros.sim.2))/length(zeros.sim.2),3)
+  
+  # create labels for factor levels passed to ggplot which include p-value:
+  thelabs <- c(paste0(levels(dat2[,paste0(fact1)])[1],'\np = ',round(q.1,3)),
+               paste0(levels(dat2[,paste0(fact1)])[2],'\np = ',round(q.2,3))
+               )
+  # add labels to factor level
+  res2[,'fact1'] <- factor(res2[,'fact1'], levels = levels(res2[,'fact1']), labels = thelabs)
+  
+  # plot:
+  plot1 <- ggplot() + 
+    geom_histogram(data = dplyr::filter(res2, type == 'sim'), aes(x = prop.zero), bins = 25, col = "gray40", fill = "gray40") + 
+    geom_vline(data = dplyr::filter(res2, type == 'obs'), aes(xintercept = prop.zero), col = "red") +
+    facet_wrap(~ fact1, scales = "free") + 
+    xlab(expression(p(Y=0))) +
+    #geom_text(data = qv, aes(label = qv), x = xval, y = yval) +
+    #ggtitle(data = qv, aes(label = qv)) +
+    theme_pth1() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+  return(list('plot' = plot1, 'data' = res2))  
+}
+
+
+#### prop.zero.plant-level
+prop.zero2 <- function(sim1, dat1, fact1 = 'site_type', response1 = 'stipples', plant.level = TRUE){
+  # define zero prop calculation function
+  calc.prop.zero <- function(x){ length(which(x==0))/length(x) }
+  
+  # join data and sim data:
+  dat2 <- cbind(dat1, sim1)
+  
+  # if plant.level == TRUE, aggregate by plant id within site to sum up counts:
+  if (plant.level == TRUE){
+  dat2 <- aggregate(dat2[,names(dat2) %in% c('stipples',grep('sim_', names(sim1), value = T))], by = list(dat2[,'site_type'],dat2[,'stem_id']), FUN="sum")
+  names(dat2)[1:2] <- c('site_type','stem_id')
+  }
+  
+  # find observed number of zeros by grouping factor:
+  lvl1 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[1],]
+  lvl2 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[2],]
+  
+  # calculate distribution of proportion zeros by grouping factor for all simulations:
+  zeros.sim.1 <- apply(lvl1[,names(lvl1) %in% names(sim1)], 2, calc.prop.zero)
+  zeros.sim.2 <- apply(lvl2[,names(lvl1) %in% names(sim1)], 2, calc.prop.zero)
+  
+  # calculate proportion of observed zeros by grouping factor:
+  lvl1.0 <- calc.prop.zero(lvl1[,paste0(response1)])
+  lvl2.0 <- calc.prop.zero(lvl2[,paste0(response1)])
+  
+  # construct data.frame
+  res1 <- data.frame(prop.zero = c(as.vector(zeros.sim.1),as.vector(zeros.sim.2)),
+                     fact1 = c(rep(levels(dat2[,paste0(fact1)])[1],length(sim1[1,])),
+                               rep(levels(dat2[,paste0(fact1)])[2], length(sim1[1,]))),
+                     type = 'sim'
+                     )
+  res2 <- rbind(res1, data.frame(prop.zero = c(lvl1.0,lvl2.0),
+                                 fact1 = c(levels(dat2[,paste0(fact1)])[1],levels(dat2[,paste0(fact1)])[2]),
+                                 type = c('obs','obs')
+  ))
+  
+  # calculate p-values for placing them on the plot:
+  q.1 <- round(length(which(lvl1.0 < zeros.sim.1))/length(zeros.sim.1),3)
+  q.2 <- round(length(which(lvl2.0 < zeros.sim.2))/length(zeros.sim.2),3)
+  
+  # create labels for factor levels passed to ggplot which include p-value:
+  thelabs <- c(paste0(levels(dat2[,paste0(fact1)])[1],'\np = ',round(q.1,3)),
+               paste0(levels(dat2[,paste0(fact1)])[2],'\np = ',round(q.2,3))
+               )
+  # add labels to factor level
+  res2[,'fact1'] <- factor(res2[,'fact1'], levels = levels(res2[,'fact1']), labels = thelabs)
+  
+  # plot:
+  plot1 <- ggplot() + 
+    geom_histogram(data = dplyr::filter(res2, type == 'sim'), aes(x = prop.zero), bins = 25, col = "gray40", fill = "gray40") + 
+    geom_vline(data = dplyr::filter(res2, type == 'obs'), aes(xintercept = prop.zero), col = "red") +
+    facet_wrap(~ fact1, scales = "free") + 
+    xlab(expression(p(Y=0))) +
+    #geom_text(data = qv, aes(label = qv), x = xval, y = yval) +
+    #ggtitle(data = qv, aes(label = qv)) +
+    theme_pth1() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+  return(list('plot' = plot1, 'data' = res2))  
+}
+
+
+
+
+# maximum value observed among simulation results:
+pp.max <- function(sim1, dat1, fact1 = 'site_type', response1 = 'stipples'){
+  
+  # join data and sim data:
+  dat2 <- cbind(dat1, sim1)
+  
+  # split data by grouping factor
+  lvl1 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[1],]
+  lvl2 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[2],]
+  
+  # calculate maximum value of all simulations:
+  max.sim.1 <- apply(lvl1[,names(lvl1) %in% names(sim1)], 2, max)
+  max.sim.2 <- apply(lvl2[,names(lvl2) %in% names(sim1)], 2, max)
+  
+  # calculate proportion of observed zeros by grouping factor:
+  lvl1.max <- max(lvl1[,paste0(response1)])
+  lvl2.max <- max(lvl2[,paste0(response1)])
+  
+  # construct data.frame
+  res1 <- data.frame(max.val = c(as.vector(max.sim.1),as.vector(max.sim.2)),
+                     fact1 = c(rep(levels(dat2[,paste0(fact1)])[1], length(sim1[1,])),
+                               rep(levels(dat2[,paste0(fact1)])[2], length(sim1[1,]))),
+                     type = 'sim'
+                     )
+  res2 <- rbind(res1, data.frame(max.val = c(lvl1.max,lvl2.max),
+                                 fact1 = c(levels(dat2[,paste0(fact1)])[1],levels(dat2[,paste0(fact1)])[2]),
+                                 type = c('obs','obs')
+  ))
+  
+  # calculate p-values for placing them on the plot:
+  q.1 <- round(length(which(lvl1.max < max.sim.1))/length(max.sim.1),3)
+  q.2 <- round(length(which(lvl2.max < max.sim.2))/length(max.sim.2),3)
+  
+  # create labels for factor levels passed to ggplot which include p-value:
+  thelabs <- c(paste0(levels(dat2[,paste0(fact1)])[1],'\np = ',round(q.1,3)),
+               paste0(levels(dat2[,paste0(fact1)])[2],'\np = ',round(q.2,3))
+               )
+  # add labels to factor level
+  res2[,'fact1'] <- factor(res2[,'fact1'], levels = levels(res2[,'fact1']), labels = thelabs)
+  
+  # plot:
+  plot1 <- ggplot() + 
+    geom_histogram(data = dplyr::filter(res2, type == 'sim'), aes(x = max.val), bins = 25, col = "gray40", fill = "gray40") + 
+    geom_vline(data = dplyr::filter(res2, type == 'obs'), aes(xintercept = max.val), col = "red") +
+    facet_wrap(~ fact1, scales = "free") + 
+    xlab(expression(max(Y))) +
+    #geom_text(data = qv, aes(label = qv), x = xval, y = yval) +
+    #ggtitle(data = qv, aes(label = qv)) +
+    theme_pth1() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+  return(list('plot' = plot1, 'data' = res2))  
+}
+
+### calculate means
+pp.mean <- function(sim1, dat1, fact1 = 'site_type', response1 = 'stipples'){
+  
+  # join data and sim data:
+  dat2 <- cbind(dat1, sim1)
+  
+  # split data by grouping factor
+  lvl1 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[1],]
+  lvl2 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[2],]
+  
+  # calculate maximum value of all simulations:
+  max.sim.1 <- apply(lvl1[,names(lvl1) %in% names(sim1)], 2, mean)
+  max.sim.2 <- apply(lvl2[,names(lvl2) %in% names(sim1)], 2, mean)
+  
+  # calculate proportion of observed zeros by grouping factor:
+  lvl1.max <- mean(lvl1[,paste0(response1)])
+  lvl2.max <- mean(lvl2[,paste0(response1)])
+  
+  # construct data.frame
+  res1 <- data.frame(mean.val = c(as.vector(max.sim.1),as.vector(max.sim.2)),
+                     fact1 = c(rep(levels(dat2[,paste0(fact1)])[1], length(sim1[1,])),
+                               rep(levels(dat2[,paste0(fact1)])[2], length(sim1[1,]))),
+                     type = 'sim'
+                     )
+  res2 <- rbind(res1, data.frame(mean.val = c(lvl1.max,lvl2.max),
+                                 fact1 = c(levels(dat2[,paste0(fact1)])[1],levels(dat2[,paste0(fact1)])[2]),
+                                 type = c('obs','obs')
+  ))
+  
+  # calculate p-values for placing them on the plot:
+  q.1 <- round(length(which(lvl1.max < max.sim.1))/length(max.sim.1),3)
+  q.2 <- round(length(which(lvl2.max < max.sim.2))/length(max.sim.2),3)
+  
+  # create labels for factor levels passed to ggplot which include p-value:
+  thelabs <- c(paste0(levels(dat2[,paste0(fact1)])[1],'\np = ',round(q.1,3)),
+               paste0(levels(dat2[,paste0(fact1)])[2],'\np = ',round(q.2,3))
+               )
+  # add labels to factor level
+  res2[,'fact1'] <- factor(res2[,'fact1'], levels = levels(res2[,'fact1']), labels = thelabs)
+  
+  # plot:
+  plot1 <- ggplot() + 
+    geom_histogram(data = dplyr::filter(res2, type == 'sim'), aes(x = mean.val), bins = 25, col = "gray40", fill = "gray40") + 
+    geom_vline(data = dplyr::filter(res2, type == 'obs'), aes(xintercept = mean.val), col = "red") +
+    facet_wrap(~ fact1, scales = "free") + 
+    xlab(expression(mean(Y))) +
+    #geom_text(data = qv, aes(label = qv), x = xval, y = yval) +
+    #ggtitle(data = qv, aes(label = qv)) +
+    theme_pth1() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+  return(list('plot' = plot1, 'data' = res2))  
+}
+
+
+
+# produce better test statistic: inter-quartile range using R base function IQR()
+pp.iqr <- function(sim1, dat1, fact1 = 'site_type', response1 = 'stipples'){
+  
+  # join data and sim data:
+  dat2 <- cbind(dat1, sim1)
+  
+  # split data by grouping factor
+  lvl1 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[1],]
+  lvl2 <- dat2[dat2[,paste0(fact1)] == levels(dat2[,paste0(fact1)])[2],]
+  
+  # calculate maximum value of all simulations:
+  iqr.sim.1 <- apply(lvl1[,names(lvl1) %in% names(sim1)], 2, IQR)
+  iqr.sim.2 <- apply(lvl2[,names(lvl2) %in% names(sim1)], 2, IQR)
+  
+  # calculate proportion of observed zeros by grouping factor:
+  lvl1.iqr <- IQR(lvl1[,paste0(response1)])
+  lvl2.iqr <- IQR(lvl2[,paste0(response1)])
+  
+  # construct data.frame
+  res1 <- data.frame(iqr.val = c(as.vector(iqr.sim.1),as.vector(iqr.sim.2)),
+                     fact1 = c(rep(levels(dat2[,paste0(fact1)])[1], length(sim1[1,])),
+                               rep(levels(dat2[,paste0(fact1)])[2], length(sim1[1,]))),
+                     type = 'sim'
+                     )
+  res2 <- rbind(res1, data.frame(iqr.val = c(lvl1.iqr,lvl2.iqr),
+                                 fact1 = c(levels(dat2[,paste0(fact1)])[1],levels(dat2[,paste0(fact1)])[2]),
+                                 type = c('obs','obs')
+  ))
+  
+  # calculate p-values for placing them on the plot:
+  q.1 <- round(length(which(lvl1.iqr < iqr.sim.1))/length(iqr.sim.1),3)
+  q.2 <- round(length(which(lvl2.iqr < iqr.sim.2))/length(iqr.sim.2),3)
+  
+  # create labels for factor levels passed to ggplot which include p-value:
+  thelabs <- c(paste0(levels(dat2[,paste0(fact1)])[1],'\np = ',round(q.1,3)),
+               paste0(levels(dat2[,paste0(fact1)])[2],'\np = ',round(q.2,3))
+               )
+  # add labels to factor level
+  res2[,'fact1'] <- factor(res2[,'fact1'], levels = levels(res2[,'fact1']), labels = thelabs)
+  
+  # plot:
+  plot1 <- ggplot() + 
+    geom_histogram(data = dplyr::filter(res2, type == 'sim'), aes(x = iqr.val), bins = 25, col = "gray40", fill = "gray40") + 
+    geom_vline(data = dplyr::filter(res2, type == 'obs'), aes(xintercept = iqr.val), col = "red") +
+    facet_wrap(~ fact1, scales = "free") + 
+    xlab(expression(IQR(Y))) +
+    #geom_text(data = qv, aes(label = qv), x = xval, y = yval) +
+    #ggtitle(data = qv, aes(label = qv)) +
+    theme_pth1() + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+  return(list('plot' = plot1, 'data' = res2))  
+}
+
+
+# generate residuals plot:
+resid.plot <- function(m1, d1, resids = TRUE, response1 = 'stipples', pearson=TRUE){
+  if (pearson==FALSE){
+    d2 <- data.frame(d1, resids = resid(m1), fits = predict(m1, type = "response"))
+  } else{
+    d2 <- data.frame(d1, resids = resid(m1, type = 'pearson'), fits = predict(m1, type = "response"))
+  }
+  #if (resids = TRUE) {
+    # plot residuals vs. fitted
+    p1 <- ggplot(d2, aes(x = fits, y = resids, alpha = 0.5)) + 
+      geom_point(col = "black") + 
+      facet_wrap(~ site_type, scales = "free") +
+      xlab("fitted") + ylab("residuals (Pearson)") +
+      theme_pth1() + theme(legend.position = "none",
+                           axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +  
+      geom_hline(yintercept = 0, col = "red")
+      
+  #} else{
+    p2 <- ggplot(d2, aes_string(x = 'fits', y = paste0(response1), alpha = 0.5)) + 
+      geom_point(col = "black") + 
+      facet_wrap(~ site_type, scales = "free") +
+      xlab("fitted") + ylab("observed") +
+      theme_pth1() + theme(legend.position = "none",
+                           axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +  
+      geom_abline(intercept = 0, slope = 1, col = "red")
+#  }
+return(list('p1' = p1, 'p2' = p2))
+}
+```
+
+
+#### Herbivore Survey 
+The following analyses correspond to data presented in Fig. 1A, Table 1, and section 1 of the statistical supplement (Appendix 3).
+
+Fig S1:
+```{r survey_data, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+# load herbivory survey data
+survey <- read.table(file="/Users/phumph/Dropbox/Sun_Shade_project/data/source_site_traits/site_herbivory_final.txt",header=T)
+
+# plot distributions of raw counts broken down by site type
+fS1a <- ggplot(survey,aes(x = stipples)) + geom_histogram(bins = 20) + facet_wrap(~ site_type) +
+  theme_pth1()
+fS1b <- ggplot(survey,aes(x = mines)) + geom_histogram(bins = 20) + facet_wrap(~ site_type) +
+  theme_pth1()
+
+# Appendix 3: Fig. S1
+pdf(file = "A3_figS1.pdf", width = 4, height = 2)
+  ggarrange(plotlist = list(fS1a, fS1b), nrow = 1,ncol = 2, labels = c("A","B"))
+dev.off()
+ggarrange(plotlist = list(fS1a, fS1b), nrow = 1,ncol = 2, labels = c("A","B"))
+```
+
+
+Fig S2:
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+# gg2 <- ggplot(sites3, aes(y = v_s/m_s, x = site_type)) + 
+#   geom_point(size = 2.5, col = "gray40") + 
+#   theme_ph1() + ggtitle("stipples") + theme(plot.title = element_text(size = 10, hjust = 0.5)) +
+#   geom_hline(yintercept = 1, col = "gray60", lty = 2) +
+#   xlab("") + 
+#   ylab("variance / mean")
+#   #ylab(expression(sigma^2 / bar(x)))
+# 
+# gg2b <- ggplot(sites3, aes(y = v_m/m_m, x = site_type)) + 
+#   geom_point(size = 2.5, col = "gray40") + 
+#   theme_ph1() + ggtitle("mines") + theme(plot.title = element_text(size = 10, hjust = 0.5)) +
+#   geom_hline(yintercept = 1, col = "gray60", lty = 2) +
+#   xlab("") + 
+#   ylab("variance / mean")
+#   #ylab(expression(sigma^2 / bar(x)))
+# 
+# pdf(file = "A3_figS2.pdf", width = 4, height = 2.5)
+# ggarrange(plotlist = list(gg2, gg2b), nrow = 1,ncol = 2, labels = c("A","B"))
+# dev.off()
+```
+
+Run models and diagnostics for survey data for stipples and mines:
+```{r}
+# exclude any rows containing NA values (n=2 rows excluded)
+survey <- survey[complete.cases(survey),]
+
+## POISSON ONLY MODEL 
+POIS.stip  <- glmmTMB(stipples ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = poisson)
+POIS.mines <- glmmTMB(mines ~ site_type + area + leaf_id_old +(1|site_id) + (1|stem_id),
+                     data = survey,
+                     family = poisson)
+# errors produced by these models are normal. See https://cran.r-project.org/web/packages/glmmTMB/vignettes/troubleshooting.html for details.
+
+
+# generate residual plots for Poisson stipple model
+
+#### simuate models ####
+# calculate expected proportion of zeros from simulated values.
+sim.POIS.stip  <- simulate(POIS.stip,  nsim = 1000)
+sim.POIS.mines <- simulate(POIS.mines, nsim = 1000)
+
+# display distributions for Poisson model
+POIS.stip.p0  <- prop.zero(sim1 = sim.POIS.stip, dat1 = survey, response1 = 'stipples')
+POIS.stip.max <- max.val(sim1 = sim.POIS.stip, dat1 = survey, response1 = 'stipples')
+POIS.stip.iqr <- pp.iqr(sim1 = sim.POIS.stip, dat1 = survey, response1 = 'stipples')
+
+POIS.mines.p0  <- prop.zero(sim1 = sim.POIS.mines, dat1 = survey, response1 = 'mines')
+POIS.mines.max <- max.val(sim1 = sim.POIS.mines, dat1 = survey, response1 = 'mines')
+POIS.mines.iqr <- pp.iqr(sim1 = sim.POIS.mines, dat1 = survey, response1 = 'mines')
+
+P1 <- resid.plot(m1 = POIS.stip, d1 = survey)
+P2 <- resid.plot(m1 = POIS.mines, d1 = survey)
+```
+
+Poisson-only diagnostic plots for stipple counts (Fig. S3):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+pdf(file = "A3_figS3.pdf",width = 6, height = 4)
+ggarrange(plotlist = list(P1[[2]],
+                          #P1[[2]],
+                          POIS.stip.p0[[1]],
+                          POIS.stip.iqr[[1]],
+                          POIS.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),align = "h")
+dev.off()
+ggarrange(plotlist = list(P1[[2]],
+                          #P1[[2]],
+                          POIS.stip.p0[[1]],
+                          POIS.stip.iqr[[1]],
+                          POIS.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),align = "h")
+```
+
+Poisson-only diagnostic plots for mine counts (not included as figure):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+ggarrange(plotlist = list(P2[[2]],
+                          POIS.mines.p0[[1]],
+                          POIS.mines.iqr[[1]],
+                          POIS.mines.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"), align = "h")
+```
+
+We see lack-of-fit in the $p(0)$ as well as the max value for both stipples and mines. IQR for mines is non-sensical since the counts are so low in the data.
+
+ZI-Poisson models:
+```{r}
+## POISSON ONLY MODEL 
+ZIP.stip  <- glmmTMB(stipples ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     data = survey,
+                     family = poisson)
+
+ZIP.stip2  <- glmmTMB(stipples ~ site_type + area + leaf_id_old +(1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     data = survey,
+                     family = poisson)
+
+ZIP.mines <- glmmTMB(mines ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi =~ 1,
+                     data = survey,
+                     family = poisson)
+
+ZIP.mines2 <- glmmTMB(mines ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi =~ site_type,
+                     data = survey,
+                     family = poisson)
+```
+
+NB models:
+```{r}
+NB.stip  <- glmmTMB(stipples ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     #zi = ~ 1,
+                     data = survey,
+                     family = nbinom2)
+
+NB.mines <- glmmTMB(mines ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     #zi =~ 1,
+                     data = survey,
+                     family = nbinom2)
+```
+
+ZINB models:
+```{r}
+ZINB.stip  <- glmmTMB(stipples ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip2  <- glmmTMB(stipples ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     data = survey,
+                     family = nbinom2)
+
+## does not converge!!
+ZINB.mines <- glmmTMB(mines ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi =~ 1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines2 <- glmmTMB(mines ~ site_type + area + leaf_id_old + (1|site_id) + (1|stem_id),
+                     zi =~ site_type,
+                     data = survey,
+                     family = nbinom2)
+```
+
+Run diagnostics on NB models:
+```{r}
+sim.NB.stip  <- simulate(NB.stip,  nsim = 1000)
+sim.NB.mines <- simulate(NB.mines, nsim = 1000)
+
+# display distributions for Poisson model
+NB.stip.p0  <- prop.zero(sim1 = sim.NB.stip, dat1 = survey, response1 = 'stipples')
+NB.stip.max <- max.val(sim1 = sim.NB.stip, dat1 = survey, response1 = 'stipples')
+NB.stip.iqr <- pp.iqr(sim1 = sim.NB.stip, dat1 = survey, response1 = 'stipples')
+
+NB.mines.p0  <- prop.zero(sim1 = sim.NB.mines, dat1 = survey, response1 = 'mines')
+NB.mines.max <- max.val(sim1 = sim.NB.mines, dat1 = survey, response1 = 'mines')
+NB.mines.iqr <- pp.iqr(sim1 = sim.NB.mines, dat1 = survey, response1 = 'mines')
+
+NB1 <- resid.plot(m1 = NB.stip, d1 = survey)
+NB2 <- resid.plot(m1 = NB.mines, d1 = survey)
+```
+
+
+Plot NB model diagnostics for stipples (Fig. S4):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+pdf(file = "A3_figS4.pdf",width = 6, height = 4)
+ggarrange(plotlist = list(NB1[[2]],
+                          NB.stip.p0[[1]],
+                          NB.stip.iqr[[1]],
+                          NB.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+dev.off()
+
+ggarrange(plotlist = list(NB1[[2]],
+                          NB.stip.p0[[1]],
+                          NB.stip.iqr[[1]],
+                          NB.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+```
+
+Plot NB model diagnostics for mines (not included in Appendix 3):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+#pdf(file = "A3_figS3.pdf",width = 6, height = 4)
+ggarrange(plotlist = list(NB2[[2]],
+                          NB.mines.p0[[1]],
+                          NB.mines.iqr[[1]],
+                          NB.mines.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+#dev.off()
+```
+
+
+Run diagnostics for ZINB models:
+```{r}
+sim.ZINB.stip  <- simulate(ZINB.stip2,  nsim = 1000)
+sim.ZINB.mines <- simulate(ZINB.mines2, nsim = 1000)
+
+# display distributions for Poisson model
+ZINB.stip.p0  <- prop.zero(sim1 = sim.ZINB.stip, dat1 = survey, response1 = 'stipples')
+ZINB.stip.max <- max.val(sim1 = sim.ZINB.stip, dat1 = survey, response1 = 'stipples')
+ZINB.stip.iqr <- pp.iqr(sim1 = sim.ZINB.stip, dat1 = survey, response1 = 'stipples')
+
+ZINB.mines.p0  <- prop.zero(sim1 = sim.ZINB.mines, dat1 = survey, response1 = 'mines')
+ZINB.mines.max <- max.val(sim1 = sim.ZINB.mines, dat1 = survey, response1 = 'mines')
+ZINB.mines.iqr <- pp.iqr(sim1 = sim.ZINB.mines, dat1 = survey, response1 = 'mines')
+
+ZINB1 <- resid.plot(m1 = ZINB.stip2, d1 = survey, pearson=FALSE)
+ZINB2 <- resid.plot(m1 = ZINB.mines2, d1 = survey, pearson=FALSE)
+```
+
+
+Plot ZINB model diagnostics for stipples (Fig. S5):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+pdf(file = 'A3_figS5.pdf', width = 6, height = 4, onefile = F)
+ggarrange(plotlist = list(ZINB1[[2]],
+                          ZINB.stip.p0[[1]],
+                          ZINB.stip.iqr[[1]],
+                          ZINB.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+dev.off()
+ggarrange(plotlist = list(ZINB1[[2]],
+                          ZINB.stip.p0[[1]],
+                          ZINB.stip.iqr[[1]],
+                          ZINB.stip.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+```
+
+Plot ZINB model diagnostics for mines (not included in Appendix 3):
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+ggarrange(plotlist = list(ZINB2[[2]],
+                          ZINB.mines.p0[[1]],
+                          ZINB.mines.iqr[[1]],
+                          ZINB.mines.max[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+```
+
+Running ZINB for stipple with dispersion parameter varying with site_type:
+```{r}
+ZINB.stip.d0  <- glmmTMB(stipples ~ site_type + area  + (1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     #dispformula = ~site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip.d1  <- glmmTMB(stipples ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     #dispformula = ~1,
+                     data = survey,
+                     family = nbinom2)
+
+# best model
+ZINB.stip.d2  <- glmmTMB(stipples ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~1,
+                     dispformula = ~0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.stip.d3  <- glmmTMB(stipples ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~site_type,
+                     dispformula = ~site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines2.d0  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~1,
+                     dispformula = ~1,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines2.d1  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~site_type,
+                     dispformula = ~1,
+                     data = survey,
+                     family = nbinom2)
+
+s  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~1,
+                     dispformula = ~0 + site_type,
+                     data = survey,
+                     family = nbinom2)
+
+ZINB.mines2.d3  <- glmmTMB(mines ~ site_type + area + (1|site_id) + (1|stem_id),
+                     zi = ~site_type,
+                     dispformula = ~site_type,
+                     data = survey,
+                     family = nbinom2)
+```
+
+Model diagnostics and plots for ZINB with dispersion parameter a function of site_type:
+```{r}
+sim.ZINB.stip.d2   <- simulate(ZINB.stip.d2,  nsim = 1000)
+sim.ZINB.mines.d1  <- simulate(ZINB.mines2.d1,  nsim = 1000)
+
+ZINB.stip.p0.d2  <- prop.zero(sim1 = sim.ZINB.stip.d2, dat1 = survey, response1 = 'stipples')
+ZINB.stip.max.d2 <- max.val(sim1 = sim.ZINB.stip.d2, dat1 = survey, response1 = 'stipples')
+ZINB.stip.iqr.d2 <- pp.iqr(sim1 = sim.ZINB.stip.d2, dat1 = survey, response1 = 'stipples')
+
+ZINB.mines.p0.d1  <- prop.zero(sim1 = sim.ZINB.mines.d1, dat1 = survey, response1 = 'mines')
+ZINB.mines.max.d1 <- max.val(sim1 = sim.ZINB.mines.d1, dat1 = survey, response1 = 'mines')
+ZINB.mines.iqr.d1 <- pp.iqr(sim1 = sim.ZINB.mines.d1, dat1 = survey, response1 = 'mines')
+
+ZINB1.d2 <- resid.plot(m1 = ZINB.stip.d2, d1 = survey, pearson=FALSE)
+ZINB2.d1 <- resid.plot(m1 = ZINB.mines2.d1, d1 = survey, pearson=FALSE)
+```
+
+
+```{r, fig.height=4, fig.width=6, message=FALSE, warning=FALSE}
+ggarrange(plotlist = list(ZINB1.d2[[2]],
+                          ZINB.stip.p0.d2[[1]],
+                          ZINB.stip.iqr.d2[[1]],
+                          ZINB.stip.max.d2[[1]]),
+                          nrow = 2,ncol = 2, labels = c("A","B","C","D"),
+          align = "h")
+```
+
+I am very comfortable with these plots, even though residuals are a little funky for the sun sites. IQR and $p(0)$ look spot-on, and these are most useful statistics probably that reflect the average behavior of the model. Max will be bounded in reality by leaf size.
+
+I'm comfortable moving forward with these as the models I report in the main text. Let's check, via AICc, the various permutations of these models for reporting:
+```{r}
+ICtab(ZINB.stip.d0,ZINB.stip.d1,ZINB.stip.d2,ZINB.stip.d3, type = 'AIC')
+```
+
+Now for the mines models:
+```{r}
+ICtab(ZINB.mines2.d0,ZINB.mines2.d1,ZINB.mines2.d2,ZINB.mines2.d3, type = 'AIC')
+```
+
+```{r}
+summary(ZINB.mines2.d2)
+```
+
+Write simple function to parse output:
+```{r}
+mod <- ZINB.mines2.d2
+
+tmb_coef_out <- function(mod){
+ci <- confint(mod)
+  
+m1 <- summary(mod)
+fe <- do.call(rbind, m1$coefficients)
+fe2 <- data.frame(fe)
+fe2[,'term'] <- row.names(fe)
+
+# capture information on dimensions of each list element to name the mixture model component:
+
+dims <- sapply(m1$coefficients, dim)
+mod_comps <- rep(colnames(dims), dims[1,])
+fe2[,'component'] <- mod_comps
+# need to clean up this data.frame
+
+
+# grab estimates for confint
+
+# now for random effects
+re <- do.call(rbind, m1$varcor)
+return(coef_all)
+}
+
+ci_stips <- confint(ZINB.stip.d2)
+coef_stips <- do.call(rbind,summary(ZINB.stip.d2)$coef)
+
+ci_mines <- confint(ZINB.mines2.d2)
+coef_mines <- do.call(rbind, summary(ZINB.mines2.d2)$coef)
+
+# OK it gives dispersion parameter estimates on exp(x) scale... interesting!
+```
+
+Rather than worry about some function, just output the results piecewise and make the table fast:
+```{r}
+# stipples model for survey:
+write.table(ci_stips, file = "survey_stips.txt", sep = '\t')
+write.table(ci_mines, file = "survey_mines.txt", sep = '\t')
+write.table(coef_stips, file = 'survey_stips_coef.txt', sep = '\t')
+write.table(coef_mines, file = 'survey_mines_coef.txt', sep = '\t')
+```
+
+
+#### Generating summary statistics from model fits for survey data
+
+First we will simulate data from best model fits and estimate predicted means and $p(0)$ for stipples and mines:
+```{r}
+# stipples:
+# simulate stippling model: ZINB.stip.d2
+ss.stip   <- simulate(ZINB.stip.d2,  nsim = 1000)
+ss.mine   <- simulate(ZINB.mines2.d2,  nsim = 1000)
+
+# calculate summary statistics for each of these:
+ss.stip.mean <- pp.mean(ss.stip, survey)
+ss.mine.mean <- pp.mean(ss.mine, survey)
+
+ggarrange(plotlist = list(ss.stip.mean$plot, ss.mine.mean$plot))
+
+ggplot(ss.mine.mean$data, aes(x = fact1, y = mean.val)) + geom_boxplot() + theme_pth1()
+```
+
+Do a similar thing with egg deposition in d15l trials:
+```{r}
+ss.egg15 <- simulate(nb15e.3c, nsim = 1000)
+d15l[,'condition'] <- paste0(d15l[,'light'],'_',d15l[,'temp'])
+ss.egg15.mean <- pp.mean(ss.egg15, d15l, fact1 = 'light', response1 = 'eggs')
+
+egg.sim <- cbind(d15l, ss.egg15)
+
+# melt for analysis:
+egg.sim2 <- reshape::melt.data.frame(egg.sim[,-c(1:16)], id.vars = c('condition'), variable.name = 'cond', value.name = 'eggs')
+egg.sim3 <- dplyr::group_by(egg.sim2, condition, variable) %>% summarise(mu = mean(value))
+egg.sim4 <- dplyr::group_by(egg.sim3, condition) %>% summarise(mu2 = mean(mu),
+                                                                         lower = quantile(mu, probs = 0.025),
+                                                                         upper = quantile(mu, probs = 0.975))
+
+
+# write function to spit out these predicted mean count intervals
+pred.mean.int <- function(themod, thedat, NSIM = 1000, IDs = 'condition', VAL = 'eggs'){
+  require(reshape2)
+  require(dplyr)
+  sim <- simulate(themod, nsim = NSIM)
+  thedat2 <- cbind(thedat[,names(thedat) %in% c(IDs,VAL)],sim)
+  thedat3 <- reshape::melt.data.frame(thedat2, id.vars = paste0(IDs), value.name = paste0(VAL))
+  thedat4 <- dplyr::group_by(thedat3, condition, variable) %>% summarise(mu = mean(value))
+  thedat5 <- dplyr::group_by(thedat4, condition) %>% summarise(mu2 = mean(mu),
+                                                                         lower = quantile(mu, probs = 0.025),
+                                                                         upper = quantile(mu, probs = 0.975))
+  return(list(each = thedat4, means = thedat5))
+}
+
+eggs.pred1 <- pred.mean.int(themod = nb15e.3c, thedat = d15l)
+stip.pred1 <- pred.mean.int(themod = nb15.3c, thedat = d15l)
+eggs.pred1
+```
+
+now plot to see if it corresponds:
+```{r}
+dplyr::group_by(d15l, condition) %>% summarise(n = mean(eggs))
+```
+
+Now for stipples:
+```{r}
+stip.pred1
+```
+
+
+```{r}
+dplyr::group_by(d15l, light) %>% summarise(n = mean(stipples))
+```
+
+```{r, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+
+ss.stip15 <- simulate(nb15.3c.d1, nsim = 1000)
+x1 <- pp.mean(ss.stip15, d15l, fact1 = 'light', response1 = 'stipples')
+print(x1[[1]])
+
+x2 <- prop.zero(ss.stip15, d15l, fact1 = 'light', response1 = 'stipples')
+
+print(x2[[1]])
+```
+
+### hurdle models
+
+Let's try to fit hurdle NB2 models to the same data:
+```{r}
+NBH.stip.0  <- glmmTMB(stipples ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ 1,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.stip.1  <- glmmTMB(stipples ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ 1,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.stip.2  <- glmmTMB(stipples ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.stip.3  <- glmmTMB(stipples ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+AICctab(ZINB.stip.d2,NBH.stip.0,NBH.stip.1,NBH.stip.2,NBH.stip.3)
+```
+
+Hurdle models of leaf mines:
+```{r}
+NBH.mines.0  <- glmmTMB(mines ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ 1,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.mines.1  <- glmmTMB(mines ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ 1,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.mines.2  <- glmmTMB(mines ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ 1,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+NBH.mines.3  <- glmmTMB(mines ~ site_type + area +(1|site_id) + (1|stem_id),
+                     zi = ~ site_type,
+                     dispformula = ~ site_type,
+                     data = survey,
+                     family = list(family="truncated_nbinom2",link="log"))
+
+AICctab(ZINB.mines2.d0,ZINB.mines2.d1,NBH.mines.0,NBH.mines.1)
+```
+
+This is going to take more time to re-think. Basically, there are principled reasons to fit Hurdle models based on wanting to estimate prevalence differences as well as intensity. But this isn't required of the data if we can make the same inference based on non-hurdle ZI models. The models fit the data better and generate predictions on the prevalence, which is the quantity of interest. Probably I should just use Bayesian models and generate $y^{rep}$ data to estimate prevalences and intensities from the predicted distributions. This will basically allow me to discuss what I *care* about, which is the probability of getting damage, which comes from both true and false zeros. From the plant perspective, this doesn't necessarily matter. Aggregation is interesting, suggesting positive correlations among counts that are site-dependent. Maybe this has to do with gregarious feeding behavior, or induction of attractive volatiles. We do not know the mechanisms. For the purposes of this paper, the difference is less important, since we're basically quantifying coarse-level differences. 
+
+The other thing is that *plants* are the relevant biological unit, not *leaves*; thus, we want to know how many plants avoid damage altogether in habitats of these two types. We can simulate from the models and estimate posterior distributions of differences in risk.
+
+#### Re-making Figure 1
+Herbivore survery sub-plots:
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE}
+# Survey results boxplots:
+# sum by stem:
+
+survey2 <- dplyr::group_by(survey, site_type, stem_id) %>% summarise(n_stips = sum(stipples), n_mines = sum(mines))
+stip1 <- ggplot(survey2, aes(x = site_type, y = n_stips)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+
+mine1 <- ggplot(survey2, aes(x = site_type, y = n_mines)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("leaf mines")
+
+ggarrange(plotlist = list(stip1, mine1))
+```
+
+Herbivore choice sub-plots:
+```{r}
+# load data:
+chP <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/sun_shade_choice/wholeplant.txt",T,"\t")
+chL <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/sun_shade_choice/leafassay.txt",T,"\t")
+chL$cage <- factor(chL$cage)
+chP2 <- dplyr::group_by(chP, env, plant) %>% summarise(n_eggs = sum(eggs), n_stips = sum(stips))
+```
+
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE}
+# generate plots:
+# summed counts across plants
+wp.stip <- ggplot(chP2, aes(x = env, y = n_stips)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+
+wp.eggs <- ggplot(chP2, aes(x = env, y = n_eggs)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("eggs")
+
+ggarrange(plotlist = list(wp.stip,wp.eggs))
+```
+
+Do the same with the detached leaf assay:
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE}
+dl.stip <- ggplot(chL, aes(x = env, y = stipples)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("")
+
+
+dl.eggs <- ggplot(chL, aes(x = env, y = eggs)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("")
+
+ggarrange(plotlist = list(dl.stip,dl.eggs))
+```
+
+
+Put the three panels all together:
+```{r, fig.height=2.5, fig.width=7, message=FALSE, warning=FALSE}
+ggarrange(plotlist = list(stip1, mine1, wp.stip, wp.eggs, dl.stip,dl.eggs), labels = c('A','','B','','C',''), align = 'hv', ncol = 6)
+```
+
+### Incorporating abiotic herbivory choice trials
+```{r}
+
+
+d14l <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/cage_choice_trials/final_data/lab.master.data_2014.csv", T, ",")
+d14f <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/cage_choice_trials/final_data/field.master.data_2014.csv", T, ",")
+d15l <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/cage_choice_trials/final_data/lab.master.data_2015.csv", T, ",")
+
+
+d14l$Trial <- factor(d14l$Trial)
+d14f$trial <- factor(d14f$trial)
+```
+
+
+Plot data for 2014 field then lab trials:
+```{r, fig.height=2.5, fig.width=4, message=FALSE, warning=FALSE}
+d14f.1 <- ggplot(d14f, aes(x = light, y = stipples)) + facet_wrap(~ cage) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+  
+d14l.1 <- ggplot(d14l, aes(x = Light, y = Stipples)) + facet_wrap(~ Cage) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+  
+ggarrange(plotlist = list(d14f.1,d14l.1), align = 'hv', ncol = 2)
+```
+
+Plot data for 2015 trials:
+
+```{r, fig.height=2.5, fig.width=4, message=FALSE, warning=FALSE}
+d15l.1 <- ggplot(d15l, aes(x = Side, y = Stipples)) + facet_wrap(~ Temp) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+  
+d15l.2 <- ggplot(d15l, aes(x = Side, y = Eggs)) + facet_wrap(~ Temp) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("eggs")
+  
+ggarrange(plotlist = list(d15l.1,d15l.2), align = 'hv', ncol = 2)
+```
+
+
+Put it all together:
+```{r, fig.height=5, fig.width=8, message=FALSE, warning=FALSE}
+survey_choice1 <- ggarrange(plotlist = list(stip1, mine1, wp.stip, wp.eggs, dl.stip,dl.eggs), labels = c('A','','B','','C',''), align = 'hv', ncol = 6)
+habitat_choice <- ggarrange(plotlist = list(d14f.1,d14l.1,d15l.1,d15l.2), align = 'hv', ncol = 4, labels = c('E','F','G','H'))
+
+ggarrange(plotlist=list(survey_choice1, habitat_choice), nrow = 2, align = 'hv')
+```
+
+Plot the rows one by one to get same width features of boxplots for both:
+```{r, fig.height=2.5, fig.width=6.5, message=FALSE, warning=FALSE}
+pdf(file='/Users/phumph/Dropbox/Sun_Shade_project/ms_final/Ecology_v2/fig_pieces/fig1_top.pdf', onefile = F, width = 6.5, height = 2.5)
+  ggarrange(plotlist = list(stip1, mine1, wp.stip, wp.eggs, dl.stip,dl.eggs), labels = c('A','','B','','C',''), align = 'hv', ncol = 6)
+dev.off()
+
+pdf(file='/Users/phumph/Dropbox/Sun_Shade_project/ms_final/Ecology_v2/fig_pieces/fig1_bot.pdf', onefile = F, width = 8, height = 2.5)
+  ggarrange(plotlist = list(d14f.1,d14l.1,d15l.1,d15l.2), align = 'hv', ncol = 4, labels = c('E','F','G','H'))
+dev.off()
+
+```
+
+I should try to plot by trial--maybe that would be a more convincing way to show it, while emphasizing the datapoints that are independent.
+
+```{r, fig.height=2, fig.width=5, message=FALSE, warning=FALSE}
+d15lb <- dplyr::group_by(d15l, Trial, Temp, Side) %>% summarize(n_stips = sum(Stipples), n_eggs = sum(Eggs))
+n1 <- ggplot(data = d15lb, aes(x = Side, y = n_stips, group = Trial)) + facet_wrap(~ Temp) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+n2 <- ggplot(data = d15lb, aes(x = Side, y = n_eggs, group = Trial)) + facet_wrap(~ Temp) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+ggarrange(plotlist = list(n1, n2), ncol = 2)
+```
+
+I sort of like this better.. Let's quickly re-plot the 2010 choice data:
+```{r, fig.height=2, fig.width=4, message=FALSE, warning=FALSE}
+# chP
+# chL
+
+chPb <- dplyr::group_by(chP, cage, env) %>% summarise(n_stips = sum(stips), n_eggs = sum(eggs))
+chP.2a <- ggplot(data = chPb, aes(x = env, y = n_stips, group = cage)) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+chP.2b <- ggplot(data = chPb, aes(x = env, y = n_eggs, group = cage)) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+ggarrange(plotlist = list(chP.2a,chP.2b), ncol = 2)
+```
+
+Look at relationship between stippling and egg-laying:
+```{r, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+
+ggplot(chP, aes(x = stips, y = eggs, col = env, group = cage)) + geom_point() + facet_wrap(~ env) + theme_pth1()
+```
+
+
+Do for detached-leaf assay:
+```{r, fig.height=2, fig.width=4, message=FALSE, warning=FALSE}
+chLb <- dplyr::group_by(chL, cage, env) %>% summarise(n_stips = sum(stipples), n_eggs = sum(eggs))
+chL.2a <- ggplot(data = chLb, aes(x = env, y = n_stips, group = cage)) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+chL.2b <- ggplot(data = chLb, aes(x = env, y = n_eggs, group = cage)) + geom_point(col = "gray40") + geom_line(col = "gray40") + theme_pth1()
+ggarrange(plotlist = list(chL.2a,chL.2b), ncol = 2)
+```
+
+Plot the relationship between stipples and eggs on each leaf:
+```{r, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+ggplot(chLb, aes(x = n_stips, y = n_eggs, col = env, group = cage)) + geom_point() + facet_wrap(~ env) + theme_pth1()
+```
+
+Check distributional form of sum of nbinom-distributed random variables:
+```{r}
+theta1 <- 1
+mu1 <- 5
+Ns <- seq(1,1000,100)
+reps <- 100
+n1 <- matrix(NA, ncol = length(Ns), nrow = reps)
+for (j in 1:length(Ns)){
+  for(i in 1:reps){
+    #n1[i,j] <- sum(rnbinom(n = Ns[j], size = theta1, mu = mu1))
+    n1[i,j] <- sum(rnbinom(n = Ns[j], size = theta1, mu = mu1))
+  }
+}
+n2 <- data.frame(n1)
+names(n2) <- paste0(Ns)
+n3 <- melt(n2)
+ggplot(n3, aes(x = value)) + geom_density() + facet_wrap(~ variable, scales = 'free')
+
+```
+
+Perhaps the sum is not normal for small samples, given the skew that we observe. We can plot this to see how badly the normal approximation performs, along with equal variances between groups..
+
+
+
+## Statistical analyses for choice tests
+
+Start with whole-plant assay, stipples:
+```{r, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+# chP
+
+chp.lm2 <- glmmTMB(stips ~ leafnum + env + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.lm3 <- glmmTMB(stips ~ leafnum + env + (1|cage) + (1|plant), data = chP, zi = ~1, family = nbinom2)
+chp.lm4 <- glmmTMB(stips ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, family = nbinom2)
+chp.lm5 <- glmmTMB(stips ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, zi = ~1, family = nbinom2)
+chp.lm6 <- glmmTMB(stips ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, zi = ~env, family = nbinom2)
+ICtab(chp.lm3,chp.lm2,chp.lm4,chp.lm5,chp.lm6,type = 'BIC')
+
+# see if this is really justified or not..
+chP3 <- chP
+chP3[,'res'] <- resid(chp.lm2)
+ggplot(chP3, aes(x = res)) + geom_density() + facet_wrap(~ env) + theme_pth1() + geom_vline(xintercept = 0, col = "red", linetype = "dotted")
+```
+
+now look at residuals for model including disp formula:
+```{r, fig.height=2.5, fig.width=5, message=FALSE, warning=FALSE}
+chP3[,'res2'] <- resid(chp.lm4)
+ggplot(chP3, aes(x = res2)) + geom_density() + facet_wrap(~ env) + theme_pth1() + geom_vline(xintercept = 0, col = "red", linetype = "dotted")
+```
+
+Make predictive check tests for $p(0)$ for these models:
+```{r, fig.height=6, fig.width=8, message=FALSE, warning=FALSE}
+chp.s2  <- simulate(chp.lm2,  nsim = 1000)
+chp.s3  <- simulate(chp.lm3,  nsim = 1000)
+chp.s4  <- simulate(chp.lm4,  nsim = 1000)
+chp.s5  <- simulate(chp.lm5,  nsim = 1000)
+
+pz.ps2 <- prop.zero(sim1 = chp.s2, dat1 = chP, response1 = 'stips', fact1 = 'env')
+pz.ps3 <- prop.zero(sim1 = chp.s3, dat1 = chP, response1 = 'stips', fact1 = 'env')
+pz.ps4 <- prop.zero(sim1 = chp.s4, dat1 = chP, response1 = 'stips', fact1 = 'env')
+pz.ps5 <- prop.zero(sim1 = chp.s5, dat1 = chP, response1 = 'stips', fact1 = 'env')
+
+
+ggarrange(plotlist = list(pz.ps2[[1]],pz.ps3[[1]],pz.ps4[[1]],pz.ps5[[1]]), ncol = 2, nrow = 2, align = 'hv')
+
+
+ZINB.stip.max.d2 <- max.val(sim1 = sim.ZINB.stip.d2, dat1 = survey, response1 = 'stipples')
+ZINB.stip.iqr.d2 <- pp.iqr(sim1 = sim.ZINB.stip.d2, dat1 = survey, response1 = 'stipples')
+```
+
+
+BIC favors simplest model. Confirmatory check is accepted. Now let's output results:
+```{r}
+#chp.lm2
+ci_stips <- confint(chp.lm2)
+coef_stips <- do.call(rbind,summary(confint(chp.lm2))$coef)
+
+ci_mines <- confint(ZINB.mines2.d2)
+coef_mines <- do.call(rbind, summary(ZINB.mines2.d2)$coef)
+
+# OK it gives dispersion parameter estimates on exp(x) scale... interesting!
+```
+
+Rather than worry about some function, just output the results piecewise and make the table fast:
+```{r}
+# stipples model for survey:
+write.table(confint(chp.lm2), file = "chP_stips.txt", sep = '\t')
+write.table(do.call(rbind,summary(chp.lm2)$coef), file = 'chP_stips_coef.txt', sep = '\t')
+```
+
+
+Do eggs now to pull all output together at once:
+
+models:
+```{r}
+e.chp.lm2 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, family = nbinom2)
+e.chp.lm3 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, zi = ~1, family = nbinom2)
+e.chp.lm4 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, family = nbinom2)
+e.chp.lm5 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, zi = ~1, family = nbinom2)
+e.chp.lm6 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, dispformula = ~ env, zi = ~env, family = nbinom2)
+ICtab(e.chp.lm2,e.chp.lm3,e.chp.lm4,e.chp.lm5,e.chp.lm6,type = 'BIC')
+# chose model e.chp.lm2
+```
+
+
+```{r}
+# eggs
+write.table(confint(e.chp.lm2), file = "chP_eggs.txt", sep = '\t')
+write.table(do.call(rbind,summary(e.chp.lm2)$coef), file = 'chP_eggs_coef.txt', sep = '\t')
+```
+
+
+Now we do detached leaf assay. First, stipples:
+```{r}
+s.chl.lm2 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, family = nbinom2)
+s.chl.lm3 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, zi = ~1, family = nbinom2)
+s.chl.lm4 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, dispformula = ~ env, family = nbinom2)
+s.chl.lm5 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, dispformula = ~ env, zi = ~1, family = nbinom2)
+s.chl.lm6 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, dispformula = ~ env, zi = ~env, family = nbinom2)
+ICtab(s.chl.lm2,s.chl.lm3,s.chl.lm4,s.chl.lm5,s.chl.lm6,type = 'BIC')
+# best model: s.chl.lm2
+```
+
+Now for eggs:
+```{r}
+e.chl.lm2b <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, family = nbinom2)
+e.chl.lm2 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, family = nbinom2)
+e.chl.lm3 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, zi = ~1, family = nbinom2)
+e.chl.lm4 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, dispformula = ~ env, family = nbinom2)
+e.chl.lm5 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, dispformula = ~ env, zi = ~1, family = nbinom2)
+e.chl.lm6 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, dispformula = ~ env, zi = ~env, family = nbinom2)
+ICtab(e.chl.lm2,e.chl.lm3,e.chl.lm4,e.chl.lm5,e.chl.lm6,type = 'AICc')
+
+# best model: e.chl.lm2
+```
+
+output results for both:
+```{r}
+# stipples
+write.table(confint(s.chl.lm2), file = "chL_stips.txt", sep = '\t')
+write.table(do.call(rbind,summary(s.chl.lm2)$coef), file = 'chL_stips_coef.txt', sep = '\t')
+
+# eggs
+write.table(confint(e.chl.lm2), file = "chL_eggs.txt", sep = '\t')
+write.table(do.call(rbind,summary(e.chl.lm2)$coef), file = 'chL_eggs_coef.txt', sep = '\t')
+```
+
+### Now for abiotic choice assays
+Start with 2014 field then lab:
+```{r}
+# establish random effects structure
+names(d14f)[2] <- c("temp")
+d14f[,'cage'] <- d14f[,'temp']
+levels(d14f[,'cage'])[1] <- 1
+levels(d14f[,'cage'])[2] <- 2
+d14f$trial <- factor(d14f$trial)
+
+
+
+# d14f.nb0  <- glmer.nb(stipples ~ 1 + (1|trial/cage/side), data = d14f,
+#                       control = glmerControl(optimizer = 'bobyqa')) # RE only model
+# d14f.nb1  <- glmer.nb(stipples ~ width + (1|trial/cage/side), data = d14f,
+#                       control = glmerControl(optimizer = 'bobyqa'))
+# d14f.nb2  <- glmer.nb(stipples ~ width + light + (1|trial/cage/side), data = d14f,
+#                       control = glmerControl(optimizer = 'bobyqa'))
+# d14f.nb3  <- glmer.nb(stipples ~ width + light + temp + (1|trial/cage/side), data = d14f,
+#                       control = glmerControl(optimizer = 'bobyqa'))
+# d14f.nb3b <- glmer.nb(stipples ~ width + light * temp + (1|trial/cage/side), data = d14f,
+#                       control = glmerControl(optimizer = 'bobyqa'))
+
+
+## glmmTMB
+d14f.nb0  <- glmmTMB(stipples ~ 1 + (1|trial/cage/side), data = d14f,family = nbinom2)
+                      
+d14f.nb1  <- glmmTMB(stipples ~ width + (1|trial/cage/side), data = d14f,family = nbinom2)
+                      
+d14f.nb2  <- glmmTMB(stipples ~ width + light + (1|trial/cage/side), data = d14f,family = nbinom2)
+                      
+d14f.nb3  <- glmmTMB(stipples ~ width + light + temp + (1|trial/cage/side), data = d14f,family = nbinom2)
+                      
+d14f.nb3b <- glmmTMB(stipples ~ width + light * temp + (1|trial/cage/side), data = d14f, family = nbinom2)
+                      
+ICtab(d14f.nb0,d14f.nb1,d14f.nb2,d14f.nb3,d14f.nb3b, type = 'AICc')
+
+# output relevant model
+write.table(round(confint(d14f.nb3b),3), file = "d14f_stips.txt", sep = '\t')
+write.table(round(do.call(rbind,summary(d14f.nb3b)$coef),3), file = 'd14f_stips_coef.txt', sep = '\t')
+```
+
+Now move on to 2014 lab data:
+```{r}
+both <- read.table("/Users/phumph/Dropbox/Sun_Shade_project/data/cage_choice_trials/final_data/lab_temps_bothyears.txt", T, "\t")
+both$year  <- factor(both$year)
+both$batch <- factor(both$batch)
+both$batch_2015 <- factor(both$batch_2015)
+both$cage  <- factor(both$cage)
+both$side  <- factor(both$side)
+both$room  <- factor(both$room)
+
+# per YEAR: first do each analysis separately:
+d14l <- dplyr::filter(both, year == 2014)
+d15l <- dplyr::filter(both, year == 2015)
+```
+
+Models for 2014 lab (stipples)
+
+```{r}
+nb14.0  <- glmmTMB(stipples ~ 1 + (1|batch/room/side), data = d14l, family = nbinom2)
+
+nb14.1  <- glmmTMB(stipples ~ width + (1|batch/room/side), data = d14l, family = nbinom2)
+
+nb14.2  <- glmmTMB(stipples ~ width + temp + (1|batch/room/side), data = d14l, family = nbinom2)
+
+nb14.2b.d1  <- glmmTMB(stipples ~ width + light + (1|batch/room/side), dispformula = ~ light, data = d14l, family = nbinom2)
+
+nb14.3  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), data = d14l, family = nbinom2)
+
+nb14.3b <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), data = d14l, family = nbinom2)
+
+ICtab(nb14.0,nb14.1,nb14.2,nb14.3,nb14.3b,nb14.2b,nb14.2b.d1,nb14.3b.d1,type = 'BIC')
+
+```
+
+Now add dispersion model to the model we wish to report:
+
+```{r}
+nb14.3b.d1 <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), dispformula = ~ light, data = d14l, family = nbinom2)
+nb14.3b.d2 <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), zi = ~ light, data = d14l, family = nbinom2)
+nb14.3b.d3 <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), zi = ~ 1, data = d14l, family = nbinom2)
+nb14.3b.d4 <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), zi = ~ 1, dispformula = ~ light, data = d14l, family = nbinom2)
+
+# output interaction model for main text:
+write.table(round(confint(nb14.3b.d1),2), file = "d14l_stips.txt", sep = '\t')
+write.table(round(do.call(rbind,summary(nb14.3b.d1)$coef),4), file = 'd14l_stips_coef.txt', sep = '\t')
+```
+
+Output predictive mean distributions:
+```{r}
+pp.mean(simulate(nb14.2b.d1, nsim = 1000), d14l, fact1 = 'light', response1 = 'stipples')
+```
+
+
+
+Now for 2015 lab (stipples):
+```{r}
+#### 2015 LAB #### stipples
+# additional difference is we use habitat source as additional factor:
+nb15.0  <- glmmTMB(stipples ~ 1 + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.1  <- glmmTMB(stipples ~ width + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.2  <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.2b  <- glmmTMB(stipples ~ width + temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.3a  <- glmmTMB(stipples ~ width + light + temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.3b  <- glmmTMB(stipples ~ width + source + light + temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.3c <- glmmTMB(stipples ~ width + source + light * temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.3d <- glmmTMB(stipples ~ width + light * temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+nb15.4 <- glmmTMB(stipples ~ width + source * light * temp + (1|batch_2015/cage/side),
+                    data = d15l, family = nbinom2)
+
+ICtab(nb15.0,nb15.1,nb15.2,nb15.2b,nb15.3a,nb15.3b,nb15.3c,nb15.3d,nb15.4, type = 'AICc')
+
+
+# report full interaction model:
+# nb15.3c
+write.table(round(confint(nb15.3c.d1),2), file = "d15l_stips.txt", sep = '\t')
+write.table(round(do.call(rbind,summary(nb15.3c.d1)$coef),4), file = 'd15l_stips_coef.txt', sep = '\t')
+```
+
+Explore whether we can improve fit by modeling dispersion:
+```{r}
+nb15.3c.d1 <- glmmTMB(stipples ~ width + source + light * temp + (1|batch_2015/cage/side),
+                    dispformula = ~ light,data = d15l, family = nbinom2)
+
+nb15.3c.d2 <- glmmTMB(stipples ~ width + source + light * temp + (1|batch_2015/cage/side),
+                    #dispformula = ~ light,
+                    zi = ~light,
+                    data = d15l, family = nbinom2)
+
+nb15.3c.d3 <- glmmTMB(stipples ~ width + source + light * temp + (1|batch_2015/cage/side),
+                    #dispformula = ~ light,
+                    zi = ~1,
+                    data = d15l, family = nbinom2)
+
+ICtab(nb15.3c,nb15.3c.d1,nb15.3c.d2,nb15.3c.d3,type = 'AICc')
+# best model: nb15.3c.d1
+# just a HUGE increase in model goodness-of-fit.. it's astounding actually. Let's try adding ZI as well.
+```
+
+
+now for 2015 eggs:
+```{r}
+# EGGS
+nb15e.0  <- glmmTMB(eggs ~ 1 + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.1  <- glmmTMB(eggs ~ width + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.2  <- glmmTMB(eggs ~ width + light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.2b  <- glmmTMB(eggs ~ width + temp + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.3a  <- glmmTMB(eggs ~ width + temp + light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.3b  <- glmmTMB(eggs ~ width + source + temp + light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.3c  <- glmmTMB(eggs ~ width + source + temp * light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.3d  <- glmmTMB(eggs ~ width + temp * light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.4  <- glmmTMB(eggs ~ width + light + temp_c + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.4b <- glmmTMB(eggs ~ width + light * temp_c + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+nb15e.5  <- glmmTMB(eggs ~ width + source * temp * light + (1|batch_2015/cage/side),
+                     data = d15l, family = nbinom2)
+
+ICtab(nb15e.0,nb15e.1,nb15e.2,nb15e.2b,nb15e.3a,nb15e.3b,nb15e.3c,nb15e.3d,nb15e.4,nb15e.4b,nb15e.5, type = 'AICc')
+
+# best model: nb15e.3d
+# but I must output full interaction model: nb15e.3c
+
+write.table(round(confint(nb15e.3d.d1),2), file = "d15l_eggs.txt", sep = '\t')
+write.table(round(do.call(rbind,summary(nb15e.3d.d1)$coef),4), file = 'd15l_eggs_coef.txt', sep = '\t')
+
+```
+
+Try to evaluate dispersion parameter model on top of best model:
+```{r}
+nb15e.3d.d1  <- glmmTMB(eggs ~ width + temp * light + (1|batch_2015/cage/side),
+                     dispformula = ~ light,
+                     data = d15l, family = nbinom2)
+
+nb15e.3d.d2  <- glmmTMB(eggs ~ width + temp * light + (1|batch_2015/cage/side),
+                     zi = ~1,
+                     #dispformula = ~ light,
+                     data = d15l, family = nbinom2)
+
+nb15e.3d.d3  <- glmmTMB(eggs ~ width + temp * light + (1|batch_2015/cage/side),
+                     zi = ~light,
+                        #dispformula = ~ light,
+                     data = d15l, family = nbinom2)
+
+summary(nb15e.3d.d1)
+ICtab(nb15e.3d,nb15e.3d.d1,nb15e.3d.d2,nb15e.3d.d3, type = 'BIC') # OK this also makes a HUGE difference.. let's also try to add zero-inflation term.
+# nb15e.3d.d1 is best by long shot.
+```
+
+need to re-export model coefficient estimates and go back and re-evaluate all models to include light environment as factor.
+
+```{r}
+
+### ANALYSIS OF COMBINED DATASET
+both.0 <- glmer.nb(stipples ~ 1 + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.1 <- glmer.nb(stipples ~ width + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.2 <- glmer.nb(stipples ~ width + light + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.2b <- glmer.nb(stipples ~ width + temp + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.3a <- glmer.nb(stipples ~ width + light + temp + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+both.3b <- glmer.nb(stipples ~ width + light * temp + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.4a <- glmer.nb(stipples ~ width + light + temp_c + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+both.4b <- glmer.nb(stipples ~ width + light * temp_c + (1|year/batch_2015/cage/side),
+                     data = both, family = nbinom2)
+
+```
+

@@ -1,0 +1,339 @@
+---
+title: "Host Source Choice Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+Load the Sun Shade header file:
+```{r}
+source("_sun_shade_header.R")
+```
+
+Load choice data:
+```{r}
+chP <- read.table("./data/sun_shade_choice/wholeplant.txt",T,"\t")
+chL <- read.table("./data/sun_shade_choice/leafassay.txt",T,"\t")
+chL$cage <- factor(chL$cage)
+```
+
+### Plots
+
+Plot the data for Fig. 1b (whole-plant choice assay):
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE, fig.align='center'}
+# generate plots:
+# summed counts across plants:
+chP2 <- dplyr::group_by(chP, env, plant) %>% summarise(n_eggs = sum(eggs), n_stips = sum(stipples))
+wp.stip <- ggplot(chP2, aes(x = env, y = n_stips)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples per plant")
+
+wp.eggs <- ggplot(chP2, aes(x = env, y = n_eggs)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("eggs per plant")
+
+ggarrange(plotlist = list(wp.stip,wp.eggs))
+```
+
+Plot the data for Fig. 1c (detached leaf assay)
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE, fig.align='center'}
+dl.stip <- ggplot(chL, aes(x = env, y = stipples)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples per leaf")
+
+
+dl.eggs <- ggplot(chL, aes(x = env, y = eggs)) + 
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("eggs per leaf")
+
+ggarrange(plotlist = list(dl.stip,dl.eggs))
+```
+
+### Whole-plant assay
+
+#### Stipples
+
+Run models:
+```{r}
+chp.lm0 <- glmmTMB(stipples ~ 1 + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.lm1 <- glmmTMB(stipples ~ leafnum + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.lm2 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.lm3 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                   zi = ~1, family = nbinom2)
+chp.lm4 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                   zi = ~ env, family = nbinom2)
+chp.lm5 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                   dispformula = ~ 0 + env, family = nbinom2)
+chp.lm6 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                   dispformula = ~ 0 + env, zi = ~1, family = nbinom2)
+chp.lm7 <- glmmTMB(stipples ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                   dispformula = ~ 0 + env, zi = ~env, family = nbinom2)
+```
+
+Output model comparisons via $\Delta \text{AIC}_c$:
+```{r}
+ICtab(chp.lm0,chp.lm1,chp.lm2,chp.lm3,chp.lm4,chp.lm5,chp.lm6,type = 'AICc')
+```
+
+Output coefficient estimates for best model:
+```{r}
+# best model, based on parsimony and very little marginal improvement with one extra df for chp.lm6:
+chp.s.bm <- chp.lm5
+chp.stips <- confint(chp.s.bm)
+chp.stips.coef <- do.call(rbind,summary(chp.s.bm)$coef)
+round(chp.stips,2)
+```
+
+Simulate best stipple model:
+```{r}
+set.seed(12345)
+chp.s.sim  <- simulate(chp.s.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+chp.s.pp <- pp.plots(thesim = chp.s.sim, thedat = chP, thefact = 'env', theresponse = 'stipples')
+print(chp.s.pp$plots)
+```
+
+Print summary of test statistics:
+```{r}
+print(chp.s.pp$means)
+```
+
+```{r}
+print(chp.s.pp$p0)
+```
+
+```{r}
+print(chp.s.pp$intensity)
+```
+
+#### Eggs (whole-plant assay)
+
+Run models:
+```{r, message=FALSE, warning=FALSE}
+chp.e.lm0 <- glmmTMB(eggs ~ 1 + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.e.lm1 <- glmmTMB(eggs ~ leafnum + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.e.lm2 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, family = nbinom2)
+chp.e.lm3 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                     zi = ~1, family = nbinom2)
+chp.e.lm4 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                     zi = ~ env, family = nbinom2)
+chp.e.lm5 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                     dispformula = ~ 0 + env, family = nbinom2)
+chp.e.lm6 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                     dispformula = ~ 0 + env, zi = ~1, family = nbinom2)
+chp.e.lm7 <- glmmTMB(eggs ~ leafnum + env + (1|cage) + (1|plant), data = chP, 
+                     dispformula = ~ 0 + env, zi = ~env, family = nbinom2)
+```
+
+Compare models via $\Delta AICc$:
+```{r}
+ICtab(chp.e.lm0,chp.e.lm1,chp.e.lm2,chp.e.lm3,chp.e.lm4,
+      chp.e.lm5,chp.e.lm6,chp.e.lm7,type = 'AICc')
+```
+
+Output coefficient estimates of best model:
+```{r}
+# best model:
+chp.e.bm <- chp.e.lm2
+chp.e <- confint(chp.e.bm)
+chp.e.coef <- do.call(rbind,summary(chp.e.bm)$coef)
+round(chp.e,2)
+```
+
+Simulate best egg:
+```{r}
+set.seed(12345)
+chp.e.sim  <- simulate(chp.e.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+chp.e.pp <- pp.plots(thesim = chp.e.sim, thedat = chP, thefact = 'env', theresponse = 'eggs')
+print(chp.e.pp$plots)
+```
+
+Print summary of test statistics:
+```{r}
+print(chp.e.pp$means)
+```
+
+```{r}
+print(chp.e.pp$p0)
+```
+
+```{r}
+print(chp.e.pp$intensity)
+```
+
+
+### Detached leaf assay
+
+#### Stipples (detached leaf assay)
+
+Run models:
+```{r}
+chl.lm0 <- glmmTMB(stipples ~ 1 + (1|cage), data = chL, family = nbinom2)
+chl.lm1 <- glmmTMB(stipples ~ area + (1|cage), data = chL, family = nbinom2)
+chl.lm2 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, family = nbinom2)
+chl.lm3 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, 
+                   zi = ~1, family = nbinom2)
+chl.lm4 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, 
+                   zi = ~env, family = nbinom2)
+chl.lm5 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, 
+                   dispformula = ~ env, family = nbinom2)
+chl.lm6 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, 
+                   dispformula = ~ env, zi = ~1, family = nbinom2)
+chl.lm7 <- glmmTMB(stipples ~ area + env + (1|cage), data = chL, 
+                   dispformula = ~ env, zi = ~env, family = nbinom2)
+```
+
+Compare models via $\Delta AICc$:
+```{r}
+ICtab(chl.lm0,chl.lm1,chl.lm2,chl.lm3,chl.lm4,chl.lm5,chl.lm6,chl.lm7,type = 'AICc')
+```
+
+Output coefficient estimates of best model:
+```{r}
+# best model
+chl.bm <- chl.lm2
+chl.stips <- confint(chl.bm)
+chl.stips.coef <- do.call(rbind,summary(chl.bm)$coef)
+round(chl.stips,2)
+```
+
+Simulate best stipple model:
+```{r}
+set.seed(12345)
+chl.sim  <- simulate(chl.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+chl.pp <- pp.plots(thesim = chl.sim, thedat = chL, thefact = 'env', theresponse = 'stipples')
+print(chl.pp$plots)
+```
+
+Print summary of test statistics:
+```{r}
+print(chl.pp$means)
+```
+
+```{r}
+print(chl.pp$p0)
+```
+
+```{r}
+print(chl.pp$intensity)
+```
+
+#### Eggs (detached leaf assay)
+
+Run models:
+```{r}
+chl.e.lm0 <- glmmTMB(eggs ~ 1 + (1|cage), data = chL, family = nbinom2)
+chl.e.lm1 <- glmmTMB(eggs ~ area + (1|cage), data = chL, family = nbinom2)
+chl.e.lm2 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, family = nbinom2)
+chl.e.lm3 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, 
+                     zi = ~1, family = nbinom2)
+chl.e.lm4 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, 
+                     zi = ~env, family = nbinom2)
+chl.e.lm5 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, 
+                     dispformula = ~ env, family = nbinom2)
+chl.e.lm6 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, 
+                     dispformula = ~ env, zi = ~1, family = nbinom2)
+chl.e.lm7 <- glmmTMB(eggs ~ area + env + (1|cage), data = chL, 
+                     dispformula = ~ env, zi = ~env, family = nbinom2)
+```
+
+Compare models via $\Delta \text{AIC}_c$:
+```{r}
+ICtab(chl.e.lm0,chl.e.lm1,chl.e.lm2,chl.e.lm3,chl.e.lm4,
+      chl.e.lm5,chl.e.lm6,chl.e.lm7,type = 'AICc')
+```
+
+Best model is in fact intercept-only model.. elaborate with dispersion and ZI terms and re-compare:
+```{r}
+chl.e.lm0.d1 <- glmmTMB(eggs ~ 1 + (1|cage), zi = ~1, data = chL, family = nbinom2)
+chl.e.lm0.d2 <- glmmTMB(eggs ~ 1 + (1|cage), zi = ~env, data = chL, family = nbinom2)
+chl.e.lm0.d3 <- glmmTMB(eggs ~ 1 + (1|cage), dispformula = ~ env, data = chL, family = nbinom2)
+chl.e.lm0.d4 <- glmmTMB(eggs ~ 1 + (1|cage), dispformula = ~ env, 
+                        zi = ~1, data = chL, family = nbinom2)
+chl.e.lm0.d5 <- glmmTMB(eggs ~ 1 + (1|cage), dispformula = ~ env, 
+                        zi = ~env, data = chL, family = nbinom2)
+
+ICtab(chl.e.lm0,chl.e.lm1,chl.e.lm2,chl.e.lm3,chl.e.lm4,chl.e.lm5,chl.e.lm6,
+      chl.e.lm7,chl.e.lm0.d1,chl.e.lm0.d2,chl.e.lm0.d3,chl.e.lm0.d4,chl.e.lm0.d5, 
+      type = 'AICc')
+```
+
+In main text, we will report coefficients and predictions from non-optimal model, but report that best model was intercept-only with ZI term.
+
+Output coefficient estimates of model to report:
+```{r}
+# model to report
+chl.e.bm <- chl.e.lm2
+chl.eggs <- confint(chl.e.bm)
+chl.eggs.coef <- do.call(rbind,summary(chl.e.bm)$coef)
+round(chl.eggs,2)
+```
+
+Simulate chosen egg model:
+```{r}
+set.seed(12345)
+chl.e.sim  <- simulate(chl.e.bm,  nsim = 1000)
+```
+
+Predictive model check for $p(0)_i$ and $\mu_i$:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+chl.e.pp <- pp.plots(thesim = chl.e.sim, thedat = chL, thefact = 'env', theresponse = 'eggs')
+print(chl.e.pp$plots)
+```
+
+Output summary of test statistics:
+```{r}
+print(chl.e.pp$means)
+```
+
+```{r}
+print(chl.e.pp$p0)
+```
+
+```{r}
+print(chl.e.pp$intensity)
+```
+
+Note that the predictive response distributions all overlap for the two habitat source types.
+
+### Output model coefficients:
+```{r}
+OUTDIR <- "./model_output/"
+
+# # chP stipples
+# write.table(chp.stips, file = paste0(OUTDIR,"chp.stips_ci.txt"), sep = '\t')
+# write.table(chp.stips.coef, file = paste0(OUTDIR,"chp.stips_coef.txt"), sep = '\t')
+# 
+# # chP eggs
+# write.table(chp.e, file = paste0(OUTDIR,"chp.eggs_ci.txt"), sep = '\t')
+# write.table(chp.e.coef, file = paste0(OUTDIR,"chp.eggs_coef.txt"), sep = '\t')
+# 
+# # chL stipples
+# write.table(chl.stips, file = paste0(OUTDIR,"chl.stips_ci.txt"), sep = '\t')
+# write.table(chl.stips.coef, file = paste0(OUTDIR,"chl.stips_coef.txt"), sep = '\t')
+# 
+# # chL eggs
+# write.table(chl.eggs, file = paste0(OUTDIR,"chl.eggs_ci.txt"), sep = '\t')
+# write.table(chl.eggs.coef, file = paste0(OUTDIR,"chl.eggs_coef.txt"), sep = '\t')
+```
+
+#### Output session info
+```{r}
+sessionInfo()
+```
+

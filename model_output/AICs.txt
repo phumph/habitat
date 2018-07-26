@@ -1,0 +1,11 @@
+model.id	model family	dAICc	df	ZI	dispersion	p(0) (shade)	p(0) (sun)	mean(Y) (shade)	mean(Y) sun	max(Y) (shade)	max(Y) (sun)
+ZINB.stip3	NB	0	7	global	habitat	0.59	0.38	0.41	0.48	0.31	0.78
+ZINB.stip4	NB	1.8	8	habitat	habitat	0.47	0.43	0.44	0.47	0.36	0.77
+ZINB.stip2	NB	19.3	7	habitat	global	0.44	0.45	0.34	0.56	0.093	0.927
+ZINB.stip1	NB	20.6	6	global	global	0.088	0.8	0.39	0.51	0.081	0.94
+ZINB.stip0	NB	63.3	5	none	global	0.071	<0.001	0.46	0.62	0.32	0.991
+POIS.stip2	Poisson	72.5	6	habitat	Ð	0.43	0.45	0.29	0.54	0.03	0.85
+POIS.stip1	Poisson	74.3	5	global	Ð	0.053	0.851	0.38	0.51	0.05	0.9
+POIS.stip0	Poisson	204.0	4	none	Ð	0.031	<0.001	0.45	0.65	0.2	0.944
+											
+											

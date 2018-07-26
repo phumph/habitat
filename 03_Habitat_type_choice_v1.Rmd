@@ -1,0 +1,454 @@
+---
+title: "Habitat Type Choice Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+Load the Sun Shade header file:
+```{r}
+source("./_sun_shade_header.R")
+```
+
+Load data:
+```{r}
+# data for 2014 field:
+d14f <- read.table("./data/habitat_choice/field.master.data_2014.csv", T, ",")
+
+# modify factor names and coding
+names(d14f)[2] <- c("temp")
+d14f[,'cage'] <- d14f[,'temp']
+levels(d14f[,'cage'])[1] <- 1
+levels(d14f[,'cage'])[2] <- 2
+d14f$trial <- factor(d14f$trial)
+
+# data for 2014 and 2015 lab:
+both <- read.table("./data/habitat_choice/lab_temps_bothyears.txt", T, "\t")
+both$year  <- factor(both$year)
+both$batch <- factor(both$batch)
+both$batch_2015 <- factor(both$batch_2015)
+both$cage  <- factor(both$cage)
+both$side  <- factor(both$side)
+both$room  <- factor(both$room)
+
+# per YEAR: first do each analysis separately:
+d14l <- dplyr::filter(both, year == 2014)
+d15l <- dplyr::filter(both, year == 2015)
+```
+
+## 2014 Field trials (stipples) (2014 Response A)
+
+### Plots
+
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE, fig.align='center'}
+d14f.1 <- ggplot(d14f, aes(x = light, y = stipples)) + facet_wrap(~ temp) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+print(d14f.1)
+```
+
+### Models
+
+First, run models (using *glmmTMB*) without consideration of adding condition-dependent dispersion parameters ($\phi_k$).
+```{r}
+## glmmTMB
+d14f.nb0  <- glmmTMB(stipples ~ 1 + (1|trial/cage/side), data = d14f, family = nbinom2)
+d14f.nb1  <- glmmTMB(stipples ~ width + (1|trial/cage/side), data = d14f,family = nbinom2)
+d14f.nb2  <- glmmTMB(stipples ~ width + light + (1|trial/cage/side), data = d14f,family = nbinom2)
+d14f.nb3  <- glmmTMB(stipples ~ width + light + temp + (1|trial/cage/side), data = d14f,family = nbinom2)
+d14f.nb3b <- glmmTMB(stipples ~ width + light * temp + (1|trial/cage/side), data = d14f, family = nbinom2)
+```
+
+Compare these models via $\Delta \text{AIC}_c$:
+```{r}
+ICtab(d14f.nb0,d14f.nb1,d14f.nb2,d14f.nb3,d14f.nb3b, type = 'AICc')
+```
+
+It looks like the model that only included only light, and not temperature or its interaction with light, is the favored model.
+
+Let's see if this changes after re-estimating each of these models after including condition-specific dispersion parameters:
+```{r}
+d14f.nb0.d1  <- glmmTMB(stipples ~ 1 + (1|trial/cage/side), dispformula = ~ light, data = d14f, family = nbinom2)
+d14f.nb1.d1  <- glmmTMB(stipples ~ width + (1|trial/cage/side), dispformula = ~ light, data = d14f,family = nbinom2)
+d14f.nb2.d1  <- glmmTMB(stipples ~ width + light + (1|trial/cage/side), dispformula = ~ light, data = d14f,family = nbinom2)
+d14f.nb3.d1  <- glmmTMB(stipples ~ width + light + temp + (1|trial/cage/side), dispformula = ~ light, data = d14f,family = nbinom2)
+d14f.nb3b.d1 <- glmmTMB(stipples ~ width + light * temp + (1|trial/cage/side), dispformula = ~ light, data = d14f, family = nbinom2)
+d14f.nb3b.d1.z <- glmmTMB(stipples ~ width + light * temp + (1|trial/cage/side), dispformula = ~ light, zi = ~1, data = d14f, family = nbinom2)
+d14f.nb3b.d1.z2 <- glmmTMB(stipples ~ width + light * temp + (1|trial/cage/side), dispformula = ~ light, zi = ~ 0 + light, data = d14f, family = nbinom2)
+
+
+# adding temp to dispersion term:
+d14f.nb3.d1.z1  <- glmmTMB(stipples ~ width + light + temp + (1|trial/cage/side), dispformula = ~light + temp, data = d14f,family = nbinom2)
+d14f.nb2.d1.z1  <- glmmTMB(stipples ~ width + light + (1|trial/cage/side), dispformula = ~ light + temp, data = d14f,family = nbinom2)
+```
+
+Compare these models via $\Delta \text{AIC}_c$:
+```{r}
+ICtab(d14f.nb2.d1.z1,d14f.nb3.d1.z1,d14f.nb3b.d1.z,d14f.nb3b.d1.z2,
+      d14f.nb0.d1,d14f.nb1.d1,d14f.nb2.d1,d14f.nb3.d1,d14f.nb3b.d1, type = 'AICc')
+```
+
+Again, the same base model is preferred. Let's quantify the improvement of adding the extra dispersion term:
+```{r}
+ICtab(d14f.nb0,d14f.nb1,d14f.nb2,d14f.nb3,d14f.nb3b,d14f.nb0.d1,
+      d14f.nb1.d1,d14f.nb2.d1,d14f.nb3.d1,d14f.nb3b.d1, type = 'AICc')
+```
+
+We will report model `d14f.nb2.d1`.
+
+Output model coefficients:
+```{r}
+#d14f.bm <- d14f.nb3b.d1
+d14f.bm <- d14f.nb2.d1
+d14f.ci <- confint(d14f.bm)
+d14f.coef <- do.call(rbind,summary(d14f.bm)$coef)
+round(d14f.ci,2)
+```
+
+Output coefficient estimates with p-values:
+```{r}
+round(d14f.coef,4)
+```
+
+Simulate model to report:
+```{r, message=FALSE, warning=FALSE}
+# simulate model:
+set.seed(12345)
+d14f.sim <- simulate(d14f.bm, nsim = 1000)
+```
+
+Plot predictive distributions:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+d14f.pp <- pp.plots(thesim = d14f.sim, thedat = d14f, thefact = 'light', theresponse = 'stipples')
+print(d14f.pp$plots)
+```
+
+Report summary of test statistics:
+```{r}
+print(d14f.pp$means)
+```
+
+```{r}
+print(d14f.pp$p0)
+```
+
+```{r}
+print(d14f.pp$intensity)
+```
+
+
+## 2014 Laboratory trials (stipples) (2014 Response B)
+### Plots
+
+```{r, fig.height=2.5, fig.width=3, message=FALSE, warning=FALSE, fig.align='center'}
+d14l.1 <- ggplot(d14l, aes(x = light, y = stipples)) + facet_wrap(~ temp) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") + 
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() + 
+  scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+
+print(d14l.1)
+```
+
+### Models
+
+Run models:
+```{r}
+d14l.0  <- glmmTMB(stipples ~ 1 + (1|batch/room/side), data = d14l, family = nbinom2)
+d14l.1  <- glmmTMB(stipples ~ width + (1|batch/room/side), data = d14l, family = nbinom2)
+d14l.2  <- glmmTMB(stipples ~ width + temp + (1|batch/room/side), data = d14l, family = nbinom2)
+d14l.3  <- glmmTMB(stipples ~ width + light + (1|batch/room/side), data = d14l, family = nbinom2)
+d14l.4  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), data = d14l, family = nbinom2)
+d14l.5  <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), data = d14l, family = nbinom2)
+
+ICtab(d14l.0,d14l.1,d14l.2,d14l.3,d14l.4,d14l.5,type = 'AICc')
+```
+
+Elaborating these models with condition-specific $\phi_k$ and including zero-inflation $\pi_0$:
+```{r}
+d14l.4.d1  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), dispformula = ~ light, data = d14l, family = nbinom2)
+d14l.4.d2  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), dispformula = ~ temp, data = d14l, family = nbinom2)
+d14l.4.d1b  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), dispformula = ~ light + temp, data = d14l, family = nbinom2)
+d14l.4.d1c  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), dispformula = ~ light * temp, data = d14l, family = nbinom2)
+
+d14l.4.d1e  <- glmmTMB(stipples ~ width + light * temp + (1|batch/room/side), dispformula = ~ light + temp, data = d14l, family = nbinom2)
+
+# simplify by removing main effect of temperature
+d14l.4.d1b0  <- glmmTMB(stipples ~ width + light + (1|batch/room/side), dispformula = ~ light + temp, data = d14l, family = nbinom2)
+
+# d14l.4.d2  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), zi = ~1, data = d14l, family = nbinom2)
+# d14l.4.d3  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), zi = ~light, data = d14l, family = nbinom2)
+# d14l.4.d4  <- glmmTMB(stipples ~ width + light + temp + (1|batch/room/side), zi = ~1, dispformula = ~0 + light, data = d14l, family = nbinom2) # didn't converge
+```
+
+```{r}
+ICtab(d14l.4.d1e,d14l.4.d2,d14l.4.d1b0,d14l.4.d1,d14l.4.d1b,
+      d14l.4.d1c,d14l.0,d14l.1,d14l.2,d14l.3,d14l.4,d14l.5,type = 'AICc')
+```
+
+Output coefficients of model to report:
+```{r}
+d14l.bm <- d14l.4.d1b
+d14l.ci <- confint(d14l.bm)
+d14l.coef <- do.call(rbind,summary(d14l.bm)$coef)
+round(d14l.ci,3)
+```
+
+Output coefficient estimates with p-values:
+```{r}
+print(round(d14l.coef,3))
+```
+
+Simulate model to report:
+```{r, message=FALSE, warning=FALSE}
+# simulate model:
+set.seed(12345)
+d14l.sim <- simulate(d14l.bm, nsim = 1000)
+```
+
+Plot predictive distributions:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+# add additional factor to split predictions by temperature as well a light:
+#d14l[,'condition'] <- paste0(d14l[,'light'],'_',d14l[,'temp'])
+#d14l.pp2 <- pp.plots(thesim = d14l.sim, thedat = d14l, thefact = 'condition', theresponse = 'stipples', fourcats = TRUE)
+
+d14l.pp <- pp.plots(thesim = d14l.sim, thedat = d14l, thefact = 'light', theresponse = 'stipples')
+print(d14l.pp$plots)
+```
+
+Output summary of test statistics to report:
+```{r}
+print(d14l.pp$means)
+```
+
+```{r}
+print(d14l.pp$p0)
+```
+
+```{r}
+print(d14l.pp$intensity)
+```
+
+
+## 2015 Laboratory trials (stipples and eggs)
+### Plots
+First plot data broken down by temp and light treatment, with source habitat as an additional factor on the $x$-axis:
+```{r, fig.height=4, fig.width=5, message=FALSE, warning=FALSE, fig.align='center'}
+# d15l.1 <- ggplot(d15l, aes(x = light, y = stipples)) + facet_wrap(~ temp) +
+#   geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") +
+#   geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() +
+#   scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + xlab("") + ylab("stipples")
+# 
+# 
+# d15l.2 <- ggplot(d15l, aes(x = light, y = eggs)) + facet_wrap(~ temp) +
+#   geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") +
+#   geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() +
+#   scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) + xlab("") + ylab("eggs")
+
+d15l.1 <- ggplot(d15l, aes(x = source, y = stipples)) + facet_grid(temp ~ light) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") +
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() +
+  #scale_y_continuous(limits = c(0,100), breaks = seq(0,100,20)) + 
+  xlab("") + ylab("stipples")
+
+
+d15l.2 <- ggplot(d15l, aes(x = source, y = eggs)) + facet_grid(temp ~ light) +
+  geom_jitter(width = 0.15, alpha = 0.3, col = "gray40") +
+  geom_boxplot(alpha = 0.5, col = "gray40") + theme_pth1() +
+  #scale_y_continuous(limits = c(0,20), breaks = seq(0,20,4)) +
+  xlab("") + ylab("eggs")
+
+ggarrange(plotlist = list(d15l.1,d15l.2), align = 'hv', ncol = 2, labels = c('A','B'))
+```
+
+### Models
+#### Stipples
+
+Run models:
+```{r}
+d15l.0  <- glmmTMB(stipples ~ 1 + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.1  <- glmmTMB(stipples ~ width + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.2  <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.2b  <- glmmTMB(stipples ~ width + light + source + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.3  <- glmmTMB(stipples ~ width + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.4  <- glmmTMB(stipples ~ width + light + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.5  <- glmmTMB(stipples ~ width + source + light + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.6 <- glmmTMB(stipples ~ width + source + light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.7 <- glmmTMB(stipples ~ width + light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.8 <- glmmTMB(stipples ~ width + source * light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+
+ICtab(d15l.0,d15l.1,d15l.2,d15l.2b,d15l.3,d15l.4,d15l.5,d15l.6,d15l.7,d15l.8, type = 'AICc')
+```
+
+Add to this best model condition-dependent estimation of $\phi_k$:
+```{r}
+d15l.2.d0 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), dispformula = ~ 1, data = d15l, family = nbinom2)
+d15l.2.d1 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), dispformula = ~ light, data = d15l, family = nbinom2)
+d15l.2.d2 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), dispformula = ~ temp, data = d15l, family = nbinom2)
+# d15l.2.d3 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), dispformula = ~ light + temp, data = d15l, family = nbinom2)
+# convergence-problems: don't consider this one.
+
+# d15l.2.z1 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), zi = ~ 1, data = d15l, family = nbinom2)
+# d15l.2.z2 <- glmmTMB(stipples ~ width + light + (1|batch_2015/cage/side), zi = ~ light, data = d15l, family = nbinom2)
+# non-positive definite Hessian; do not consider ZI henceforth.
+
+ICtab(d15l.2.d0,d15l.2.d1, d15l.2.d2, type = 'AICc')
+```
+
+```{r}
+# add back source to see how it impacts model:
+d15l.2.d1.s0 <- glmmTMB(stipples ~ light + source + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2)
+d15l.2.d1.s0b <- glmmTMB(stipples ~ width + light + source + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2) # convergence problems
+d15l.2.d1.s2 <- glmmTMB(stipples ~ light * source + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2) 
+
+ICtab(d15l.2.d1,d15l.2.d1.s0b,d15l.2.d1.s2,d15l.2.d1.s0,type = 'AICc')
+```
+
+Add back temp term with condition-dependent dispersion:
+```{r}
+# d15l.2.d1.2  <- glmmTMB(stipples ~ width + light + temp + (1|batch_2015/cage/side), dispformula = ~ light, data = d15l, family = nbinom2)
+# d15l.2.d1.3  <- glmmTMB(stipples ~ width + light + temp + (1|batch_2015/cage/side), dispformula = ~ light + temp, data = d15l, family = nbinom2)
+# 
+# ICtab(d15l.2.d1,d15l.2.d2,d15l.2.d1.2,d15l.2.d1.3,type = 'AICc')
+```
+
+Output coefficient estimates of reported model (`d15l.2.d1.s0b`)
+```{r}
+d15l.s.bm <- d15l.2.d1.s0b
+d15l.s.ci <- confint(d15l.s.bm)
+d15l.s.coef <- do.call(rbind,summary(d15l.s.bm)$coef)
+round(d15l.s.coef,4)
+```
+
+Output CIs on estimates for best model:
+```{r}
+round(d15l.s.ci,2)
+```
+
+Simulate best model:
+```{r}
+set.seed(12345)
+d15l.s.sim <- simulate(d15l.s.bm, nsim = 1000)
+```
+
+Plot predictive distributions from simulation:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+d15l.s.pp <- pp.plots(thesim = d15l.s.sim, thedat = d15l, thefact = 'light', theresponse = 'stipples')
+print(d15l.s.pp$plots)
+```
+
+Output summary of test statistics:
+```{r}
+print(d15l.s.pp$means)
+```
+
+```{r}
+print(d15l.s.pp$p0)
+```
+
+```{r}
+print(d15l.s.pp$intensity)
+```
+
+#### Eggs
+
+Run models:
+```{r}
+d15l.e.0  <- glmmTMB(eggs ~ 1 + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.1  <- glmmTMB(eggs ~ width + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.2  <- glmmTMB(eggs ~ width + light + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.3  <- glmmTMB(eggs ~ width + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.4  <- glmmTMB(eggs ~ width + light + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.5  <- glmmTMB(eggs ~ width + source + light + temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.6 <- glmmTMB(eggs ~ width + source + light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.7 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+d15l.e.8 <- glmmTMB(eggs ~ width + source * light * temp + (1|batch_2015/cage/side), data = d15l, family = nbinom2)
+
+ICtab(d15l.e.0,d15l.e.1,d15l.e.2,d15l.e.3,d15l.e.4,d15l.e.5,d15l.e.6,d15l.e.7,d15l.e.8, type = 'AICc')
+```
+
+Add dispersion parameter estimates to the best model to check for model fit improvements:
+```{r}
+d15l.e.7.d1 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2) 
+d15l.e.7.d2 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + temp, data = d15l, family = nbinom2) 
+d15l.e.7.d3 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light + temp, data = d15l, family = nbinom2) 
+d15l.e.7.d4 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light * temp, data = d15l, family = nbinom2) 
+
+# add source to dispersion model:
+d15l.e.7.d5 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light + source, data = d15l, family = nbinom2) 
+d15l.e.7.d6 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light * source, data = d15l, family = nbinom2) 
+
+
+ICtab(d15l.e.7.d1,d15l.e.7.d2,d15l.e.7.d3,d15l.e.7.d4,d15l.e.0,d15l.e.1,d15l.e.2,d15l.e.3,d15l.e.4,d15l.e.5,d15l.e.6,d15l.e.7,d15l.e.8,d15l.e.7.d5,d15l.e.7.d6,type = 'AICc')
+# best model: d15l.e.7.d1
+```
+
+Add back `source` to determine its coefficient estimate, and for reporting in main text Table 1:
+```{r}
+d15l.e.7.d1 <- glmmTMB(eggs ~ width + light * temp + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2) 
+d15l.e.7.d1b <- glmmTMB(eggs ~ width + light * temp + source + (1|batch_2015/cage/side), dispformula = ~ 0 + light, data = d15l, family = nbinom2) 
+```
+
+Output coefficient estimates for reported model:
+```{r}
+d15l.e.bm <- d15l.e.7.d1b
+d15l.e.ci <- confint(d15l.e.bm)
+d15l.e.coef <- do.call(rbind,summary(d15l.e.bm)$coef)
+round(d15l.e.coef,4)
+```
+
+Output confidence intervals for coefficient estiamtes:
+```{r}
+round(d15l.e.ci,2)
+```
+
+Simulate best model:
+```{r}
+set.seed(12345)
+d15l.e.sim <- simulate(d15l.e.bm, nsim = 1000)
+```
+
+Output predictive plots for best model:
+```{r, fig.height=2, fig.width=6, message=FALSE, warning=FALSE, fig.align='center'}
+d15l.e.pp <- pp.plots(thesim = d15l.e.sim, thedat = d15l, thefact = 'light', theresponse = 'eggs')
+print(d15l.e.pp$plots)
+```
+
+Repeat summary statistic calculations for $n=4$ categories:
+```{r}
+d15l[,'condition'] <- paste0(d15l[,'light'],'_',d15l[,'temp'])
+d15l.e.pp2 <- pp.plots(thesim = d15l.e.sim, thedat = d15l, thefact = 'condition', theresponse = 'eggs', fourcat = TRUE)
+```
+
+Output summary statistics:
+```{r}
+print(d15l.e.pp2$means)
+```
+
+#### Output model coefficients:
+```{r}
+OUTDIR <- "./model_output/"
+# d14f stipples
+write.table(d14f.ci, file = paste0(OUTDIR,"d14f.stips_ci.txt"), sep = '\t')
+write.table(d14f.coef, file = paste0(OUTDIR,"d14f.stips_coef.txt"), sep = '\t')
+
+# d14l stipples
+write.table(d14l.ci, file = paste0(OUTDIR,"d14l.stips_ci.txt"), sep = '\t')
+write.table(d14l.coef, file = paste0(OUTDIR,"d14l.stips_coef.txt"), sep = '\t')
+
+# d15l stipples
+write.table(d15l.s.ci, file = paste0(OUTDIR,"d15l.stips_ci.txt"), sep = '\t')
+write.table(d15l.s.coef, file = paste0(OUTDIR,"d15l.stips_coef.txt"), sep = '\t')
+
+# d15l eggs
+write.table(d15l.e.ci, file = paste0(OUTDIR,"d15l.eggs_ci.txt"), sep = '\t')
+write.table(d15l.e.coef, file = paste0(OUTDIR,"d15l.eggs_coef.txt"), sep = '\t')
+```
+
+
+#### Output session info
+```{r}
+sessionInfo()
+```
+
