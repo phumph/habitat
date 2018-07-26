@@ -1,6 +1,5 @@
 ## Habitat preference of an herbivore shapes the habitat distribution of its host plant
-
-Alexandre et al. 2018, *Ecosphere* (doi://10.1002/ecs2.2372)[doi://10.1002/ecs2.2372]
+Alexandre, N. M., P. T. Humphrey, A. D. Gloss, J. Lee, J. Frazier, H. A. Affeldt III, and N. K. Whiteman. 2018.  Ecosphere. 10.1002/ ecs2.2372 (full citation pending).
 
 ### Files & Descriptions
 
