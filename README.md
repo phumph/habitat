@@ -10,12 +10,14 @@ Alexandre, N. M., P. T. Humphrey, A. D. Gloss, J. Lee, J. Frazier, H. A. Affeldt
 
 R scripts and associated narrative description of analysis can be found for all experiments presented in the main text in the files below. We provide Rmarkdown (`.Rmd`) files and corresponding compiled `.html` output.
 
-
 1. Herbivory survey analysis: `01_Herbivory_survey_v1.html`, `01_Herbivory_survey_v1.Rmd`
 2. Host Choice I: Sun- vs. shade-derived bittercress: `02_Host_source_choice_v1.html`, `02_Host_source_choice_v1.Rmd`
 3. Host Choice II: Effects of light and temperature: `03_Habitat_type_choice_v1.html`, `03_Habitat_type_choice_v1.Rmd`
 
 The file `_sun_shade_header.R` contains code necessary for all analysis code to be run. 
+The file `habitat_choice_temp_analysis.R` contains code to generate Appendix S4 Fig. S1.
+
+Libraries and their dependencies can be found in the `sessionInfo()` calls at the bottom of the `.html` reports.
 
 Data used in each of these analyses can be loaded from the `data` directory in the repo root. Users must set the working directory of R to the root of this cloned `github` repo in order to properly load the data.
 
